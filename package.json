@@ -1,0 +1,21 @@
+{
+  "name": "agent-workflows",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local daemon that bridges signals (PR comments, etc.) to pluggable coding agents.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "octokit": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
