@@ -11,11 +11,13 @@ export interface Config {
   githubToken: string;
   repos: RepoSpec[];
   pollIntervalSec: number;
+  commentBatchWindowSec: number;
   agent: string;
   agentSelfUser: string;
   stateDir: string;
   zcodeBin: string;
   claudeCodeBin: string;
+  codexBin: string;
   keepWorkdirs: boolean;
 }
 
@@ -53,16 +55,21 @@ export function loadConfig(): Config {
     githubToken: required("GITHUB_TOKEN"),
     repos: parseRepos(required("REPOS")),
     pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
+    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "120")),
     agent: optional("AGENT", "zcode"),
     agentSelfUser: required("AGENT_SELF_USER"),
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
+    codexBin: optional("CODEX_BIN", "codex"),
     keepWorkdirs: optional("KEEP_WORKDIRS", "false") === "true",
   };
 
   if (!Number.isFinite(cfg.pollIntervalSec) || cfg.pollIntervalSec < 5) {
     throw new Error("POLL_INTERVAL_SEC must be a number >= 5.");
+  }
+  if (!Number.isFinite(cfg.commentBatchWindowSec) || cfg.commentBatchWindowSec < 0) {
+    throw new Error("COMMENT_BATCH_WINDOW_SEC must be a number >= 0.");
   }
   if (cfg.repos.length === 0) {
     throw new Error("REPOS must list at least one owner/repo.");
@@ -72,6 +79,7 @@ export function loadConfig(): Config {
     repos: cfg.repos.map((r) => `${r.owner}/${r.repo}`),
     agent: cfg.agent,
     pollIntervalSec: cfg.pollIntervalSec,
+    commentBatchWindowSec: cfg.commentBatchWindowSec,
     stateDir: cfg.stateDir,
   });
   return cfg;

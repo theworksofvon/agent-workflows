@@ -2,6 +2,7 @@ import type { AgentAdapter } from "./types.js";
 import type { Config } from "../config.js";
 import { zcodeAdapter } from "./zcode.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { codexAdapter } from "./codex.js";
 import { log } from "../log.js";
 
 /**
@@ -14,6 +15,8 @@ export function getAgent(name: string, cfg: Config): AgentAdapter {
       return zcodeAdapter({ binary: cfg.zcodeBin });
     case "claude-code":
       return claudeCodeAdapter({ binary: cfg.claudeCodeBin });
+    case "codex":
+      return codexAdapter({ binary: cfg.codexBin });
     default:
       log.error("unknown agent adapter, falling back to zcode", { requested: name });
       return zcodeAdapter({ binary: cfg.zcodeBin });

@@ -6,6 +6,31 @@ import { MARKER_TAG } from "./client.js";
 import { log } from "../log.js";
 
 /** Payload shape the pr_comment workflow expects. */
+export interface PRCommentItem {
+  key: string;
+  id: number;
+  kind: "issue" | "review";
+  author: string;
+  body: string;
+  createdAt: string;
+  reviewId?: number | null;
+  review?: {
+    path: string;
+    line: number | null;
+    diffHunk: string;
+  };
+}
+
+export interface PRCommentBatchHistory {
+  batchId: string;
+  handledAt: string;
+  agent: string;
+  exitCode: number;
+  commitCount: number;
+  commentKeys: string[];
+  summary: string;
+}
+
 export interface PRCommentPayload {
   repo: RepoSpec;
   prNumber: number;
@@ -13,19 +38,20 @@ export interface PRCommentPayload {
   prBody: string | null;
   headRef: string;
   baseRef: string;
-  comment: {
-    id: number;
-    author: string;
-    body: string;
-    createdAt: string;
-  };
-  /** Present only for inline review comments — this is the "no bridge" context. */
-  review?: {
-    path: string;
-    line: number | null;
-    diffHunk: string;
-  };
+  batchId: string;
+  groupKey: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  comments: PRCommentItem[];
 }
+
+interface PendingCommentGroup extends PRCommentPayload {
+  firstSeenAtMs: number;
+  lastSeenAtMs: number;
+}
+
+export const prHistoryKey = (repo: RepoSpec, prNumber: number) =>
+  `gh:${repo.owner}/${repo.repo}:pr:${prNumber}:comment-batch-history`;
 
 /**
  * Polls configured repos for new PR comments (both conversation and inline
@@ -41,6 +67,10 @@ export function githubPoller(args: {
 
   const cursorKey = (repo: RepoSpec, kind: string) =>
     `gh:${repo.owner}/${repo.repo}:cursor:${kind}`;
+  const pendingKey = (repo: RepoSpec) =>
+    `gh:${repo.owner}/${repo.repo}:pending-comment-groups`;
+  const processedKey = (repo: RepoSpec) =>
+    `gh:${repo.owner}/${repo.repo}:processed-comment-keys`;
 
   /** True if a comment was authored by this daemon or tagged as its output. */
   function isSelf(body: string, author: string): boolean {
@@ -48,8 +78,53 @@ export function githubPoller(args: {
     return author.toLowerCase() === config.agentSelfUser.toLowerCase();
   }
 
+  function commentKey(repo: RepoSpec, prNumber: number, kind: "issue" | "review", id: number): string {
+    return `${repo.owner}/${repo.repo}#${prNumber}:${kind}:${id}`;
+  }
+
+  function addPendingComment(args: {
+    pending: Record<string, PendingCommentGroup>;
+    repo: RepoSpec;
+    pr: Awaited<ReturnType<GitHubClient["listOpenPRs"]>>[number];
+    groupKey: string;
+    comment: PRCommentItem;
+    now: number;
+  }): void {
+    const { pending, repo, pr, groupKey, comment, now } = args;
+    const existing = pending[groupKey];
+    const comments = existing?.comments ?? [];
+    if (comments.some((c) => c.key === comment.key)) return;
+
+    const firstSeenAtMs = existing?.firstSeenAtMs ?? now;
+    pending[groupKey] = {
+      repo,
+      prNumber: pr.number,
+      prTitle: pr.title,
+      prBody: pr.body,
+      headRef: pr.headRef,
+      baseRef: pr.baseRef,
+      batchId: existing?.batchId ?? `batch:${repo.owner}/${repo.repo}:${groupKey}:${now}`,
+      groupKey,
+      firstSeenAt: new Date(firstSeenAtMs).toISOString(),
+      lastSeenAt: new Date(now).toISOString(),
+      firstSeenAtMs,
+      lastSeenAtMs: now,
+      comments: [...comments, comment].sort((a, b) => {
+        const byTime = Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
+        return byTime === 0 ? a.id - b.id : byTime;
+      }),
+    };
+  }
+
+  function pruneProcessed(keys: Set<string>): string[] {
+    return [...keys].slice(-2000);
+  }
+
   async function pollRepo(repo: RepoSpec): Promise<Event[]> {
     const events: Event[] = [];
+    const now = Date.now();
+    const pending = store.get<Record<string, PendingCommentGroup>>(pendingKey(repo), {});
+    const processed = new Set(store.get<string[]>(processedKey(repo), []));
     const prs = await client.listOpenPRs(repo);
 
     for (const pr of prs) {
@@ -59,18 +134,22 @@ export function githubPoller(args: {
       for (const c of issueComments) {
         if (c.id <= lastIssue) continue;
         if (isSelf(c.body, c.author)) continue;
-        events.push({
-          kind: "pr_comment",
-          id: `issue:${repo.owner}/${repo.repo}:${pr.number}:${c.id}`,
-          payload: {
-            repo,
-            prNumber: pr.number,
-            prTitle: pr.title,
-            prBody: pr.body,
-            headRef: pr.headRef,
-            baseRef: pr.baseRef,
-            comment: { id: c.id, author: c.author, body: c.body, createdAt: c.createdAt },
-          } satisfies PRCommentPayload,
+        const key = commentKey(repo, pr.number, "issue", c.id);
+        if (processed.has(key)) continue;
+        addPendingComment({
+          pending,
+          repo,
+          pr,
+          groupKey: `pr:${pr.number}:conversation`,
+          now,
+          comment: {
+            key,
+            id: c.id,
+            kind: "issue",
+            author: c.author,
+            body: c.body,
+            createdAt: c.createdAt,
+          },
         });
       }
       const maxIssue = issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue);
@@ -82,24 +161,61 @@ export function githubPoller(args: {
       for (const c of reviewComments) {
         if (c.id <= lastReview) continue;
         if (isSelf(c.body, c.author)) continue;
-        events.push({
-          kind: "pr_comment",
-          id: `review:${repo.owner}/${repo.repo}:${pr.number}:${c.id}`,
-          payload: {
-            repo,
-            prNumber: pr.number,
-            prTitle: pr.title,
-            prBody: pr.body,
-            headRef: pr.headRef,
-            baseRef: pr.baseRef,
-            comment: { id: c.id, author: c.author, body: c.body, createdAt: c.createdAt },
+        const key = commentKey(repo, pr.number, "review", c.id);
+        if (processed.has(key)) continue;
+        addPendingComment({
+          pending,
+          repo,
+          pr,
+          groupKey: c.reviewId
+            ? `pr:${pr.number}:review:${c.reviewId}`
+            : `pr:${pr.number}:review-comments`,
+          now,
+          comment: {
+            key,
+            id: c.id,
+            kind: "review",
+            author: c.author,
+            body: c.body,
+            createdAt: c.createdAt,
+            reviewId: c.reviewId,
             review: { path: c.path, line: c.line ?? c.originalLine, diffHunk: c.diffHunk },
-          } satisfies PRCommentPayload,
+          },
         });
       }
       const maxReview = reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview);
       store.set(cursorKey(repo, "review"), maxReview);
     }
+
+    const windowMs = config.commentBatchWindowSec * 1000;
+    for (const [groupKey, group] of Object.entries(pending)) {
+      if (now - group.lastSeenAtMs < windowMs) continue;
+      const payload: PRCommentPayload = {
+        repo: group.repo,
+        prNumber: group.prNumber,
+        prTitle: group.prTitle,
+        prBody: group.prBody,
+        headRef: group.headRef,
+        baseRef: group.baseRef,
+        batchId: group.batchId,
+        groupKey: group.groupKey,
+        firstSeenAt: group.firstSeenAt,
+        lastSeenAt: group.lastSeenAt,
+        comments: group.comments,
+      };
+      for (const comment of group.comments) {
+        processed.add(comment.key);
+      }
+      delete pending[groupKey];
+      events.push({
+        kind: "pr_comment",
+        id: group.batchId,
+        payload: payload satisfies PRCommentPayload,
+      });
+    }
+
+    store.set(pendingKey(repo), pending);
+    store.set(processedKey(repo), pruneProcessed(processed));
     return events;
   }
 

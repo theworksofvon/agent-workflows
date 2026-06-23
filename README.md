@@ -38,13 +38,17 @@ All via environment (`.env`):
 | `REPOS` | yes | — | `owner/repo,owner/repo2` |
 | `AGENT_SELF_USER` | yes | — | this daemon's GitHub username (so it ignores its own comments) |
 | `POLL_INTERVAL_SEC` | no | `60` | seconds between polls |
-| `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` |
+| `COMMENT_BATCH_WINDOW_SEC` | no | `120` | quiet-window seconds for grouping related comments before running an agent |
+| `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
 | `STATE_DIR` | no | `./state` | where state.json + workdirs live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
+| `CODEX_BIN` | no | `codex` | path to the codex binary |
 | `KEEP_WORKDIRS` | no | `false` | keep per-task workdirs for debugging |
 
-## How loop prevention works
+## Comment batching and loop prevention
+
+New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch. The workflow also writes a compact changelog entry to `state.json` recording which comment keys were handled, which agent ran, and what happened, so future agent prompts can include recent PR context without replaying every old comment.
 
 The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and also ignores any comment authored by `AGENT_SELF_USER`. So the agent never reacts to its own output.
 
@@ -74,7 +78,7 @@ Then register it in `workflows/registry.ts` alongside `prCommentWorkflow`.
 
 ## Safety notes
 
-- The agent runs with `--dangerously-skip-permissions` in an isolated checkout. It only touches its throwaway workdir; the push to the PR uses `--force-with-lease`.
+- The agent runs with unattended permissions in an isolated checkout. It only touches its throwaway workdir; the push to the PR uses `--force-with-lease`.
 - Comments authored by `AGENT_SELF_USER` and any comment carrying the marker tag are skipped.
 - Execution is serial — one task at a time — so concurrent PR pushes never race.
 
@@ -97,4 +101,4 @@ src/
 
 ## Status
 
-v0.1 — framework + PR-comment workflow + two agent adapters. Webhook source, concurrency, and deeper review-comment linking are deliberate follow-ups (the seams already support them).
+v0.1 — framework + PR-comment workflow + zcode, Claude Code, and Codex adapters. Webhook source, concurrency, and deeper review-comment linking are deliberate follow-ups (the seams already support them).
