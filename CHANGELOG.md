@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Clarify Review Agent Prompt
+
+Date: 2026-06-23 16:05:46 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
+Task: Make the coding agent prompt clearer for batched PR review feedback.
+Message: Agents now receive explicit review-agent framing, repo-convention guidance, validation expectations, and delegation guidance.
+Added/Changed: Updated `src/workflows/pr-comment/context.ts` instructions for batching, sub-agent use, scoped edits, and commit discipline.
+Fixed/Removed: Reduces generic prompt behavior and discourages unrelated refactors or duplicate investigation.
+Handoff: Verified with `npm run typecheck`; keep prompt context bounded to the current PR batch plus recent changelog.
+
 ### Add Codex Adapter And Batched PR Comment Handling
 
 Date: 2026-06-23 15:41:30 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
