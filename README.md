@@ -39,8 +39,11 @@ All via environment (`.env`):
 | `AGENT_SELF_USER` | yes | — | this daemon's GitHub username (so it ignores its own comments) |
 | `POLL_INTERVAL_SEC` | no | `60` | seconds between polls |
 | `COMMENT_BATCH_WINDOW_SEC` | no | `120` | quiet-window seconds for grouping related comments before running an agent |
+| `PR_CONTEXT_HISTORY_LIMIT` | no | `5` | recent PR changelog entries included in an agent prompt |
+| `COMMENT_BATCH_HISTORY_LIMIT` | no | `20` | changelog entries retained per PR |
+| `PROCESSED_COMMENT_KEY_LIMIT` | no | `2000` | recently handled comment keys retained per repo for duplicate protection |
 | `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
-| `STATE_DIR` | no | `./state` | where state.json + workdirs live (gitignored) |
+| `STATE_DIR` | no | `./state` | where repo state files + workdirs live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
 | `CODEX_BIN` | no | `codex` | path to the codex binary |
@@ -48,7 +51,9 @@ All via environment (`.env`):
 
 ## Comment batching and loop prevention
 
-New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch. The workflow also writes a compact changelog entry to `state.json` recording which comment keys were handled, which agent ran, and what happened, so future agent prompts can include recent PR context without replaying every old comment.
+New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
+
+GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains only that repo's cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
 
 The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and also ignores any comment authored by `AGENT_SELF_USER`. So the agent never reacts to its own output.
 
@@ -89,10 +94,11 @@ src/
   index.ts          entry: load config, wire everything, start daemon
   daemon.ts         poll loop + serial queue + dispatch
   config.ts         typed env config
-  store.ts          JSON-backed state (cursors)
+  store.ts          generic JSON-backed state helper
   queue.ts          serial task queue
   log.ts            structured logger
   github/           octokit client + PR comment poller
+    state.ts        typed per-repo GitHub state files
   sources/          Source seam
   agents/           AgentAdapter seam + zcode/claude-code adapters
   workflows/        Workflow seam + pr-comment/

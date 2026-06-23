@@ -1,5 +1,4 @@
 import type { Config } from "../config.js";
-import type { Store } from "../store.js";
 import type { Event } from "../sources/types.js";
 import type { AgentAdapter } from "../agents/types.js";
 
@@ -10,7 +9,6 @@ import type { AgentAdapter } from "../agents/types.js";
  */
 export interface RunCtx {
   config: Config;
-  store: Store;
   agent: AgentAdapter;
   /** Post a PR comment tagged so the daemon ignores it (loop prevention). */
   postMarkerComment(args: {

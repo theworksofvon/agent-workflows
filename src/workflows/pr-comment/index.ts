@@ -1,7 +1,7 @@
 import type { Workflow, RunCtx } from "../types.js";
 import type { Event } from "../../sources/types.js";
-import type { PRCommentBatchHistory, PRCommentPayload } from "../../github/poller.js";
-import { prHistoryKey } from "../../github/poller.js";
+import type { PRCommentPayload } from "../../github/poller.js";
+import { GitHubRepoStateStore } from "../../github/state.js";
 import { prepareWorkdir, cleanupWorkdir } from "../../runner/workdir.js";
 import { runAgent } from "../../runner/executor.js";
 import { buildPrompt } from "./context.js";
@@ -28,8 +28,11 @@ export function prCommentWorkflow(): Workflow {
         comments: p.comments.length,
       });
 
-      const historyKey = prHistoryKey(repo, prNumber);
-      const history = ctx.store.get<PRCommentBatchHistory[]>(historyKey, []);
+      const repoState = GitHubRepoStateStore.fromConfig(ctx.config, repo);
+      const history = repoState.getRecentPrHistory(
+        prNumber,
+        ctx.config.prContextHistoryLimit,
+      );
       const prompt = buildPrompt(p, history);
       const taskId = event.id.replace(/[^a-z0-9-]/gi, "_");
 
@@ -70,7 +73,7 @@ export function prCommentWorkflow(): Workflow {
         }
 
         await ctx.postMarkerComment({ repo, prNumber, body });
-        recordBatchHistory(ctx, historyKey, {
+        repoState.recordPrHistory(prNumber, {
           batchId: p.batchId,
           handledAt: new Date().toISOString(),
           agent: ctx.agent.name,
@@ -99,16 +102,4 @@ function summarizeBatch(p: PRCommentPayload, commitCount: number): string {
   const moreFiles = files.length > 5 ? ` and ${files.length - 5} more file(s)` : "";
   const result = commitCount > 0 ? `produced ${commitCount} commit(s)` : "produced no commits";
   return `Handled batch from ${authors.join(", ")} with ${p.comments.length} comment(s)${fileText}${moreFiles}; ${result}`;
-}
-
-function recordBatchHistory(
-  ctx: RunCtx,
-  key: string,
-  entry: PRCommentBatchHistory,
-): void {
-  ctx.store.update<PRCommentBatchHistory[]>(
-    key,
-    (current) => [...(current ?? []), entry].slice(-20),
-    [],
-  );
 }
