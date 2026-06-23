@@ -59,6 +59,7 @@ export function githubPoller(args: {
   /** True if a comment was authored by this daemon or tagged as its output. */
   function isSelf(body: string, author: string): boolean {
     if (body.includes(MARKER_TAG)) return true;
+    if (!config.agentSelfUser) return false;
     return author.toLowerCase() === config.agentSelfUser.toLowerCase();
   }
 

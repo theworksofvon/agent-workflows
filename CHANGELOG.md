@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Make AGENT_SELF_USER Optional For Personal-Token Mode
+
+Date: 2026-06-23 16:51:59 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
+Task: Let the daemon run under a personal token shared with the human reviewer.
+Message: `AGENT_SELF_USER` is now optional; when unset, the marker tag (`<!-- agent-workflows:bot -->`) is the sole loop guard, so comments from the daemon's own account still trigger it.
+Added/Changed: `config.agentSelfUser` is now `string | null` (loaded as optional); `isSelf` in `src/github/poller.ts` skips the username check when it is unset.
+Fixed/Removed: Removed the hard requirement on `AGENT_SELF_USER`; updated `.env.example` and README to document personal-token vs dedicated-bot modes.
+Handoff: Verified with `npm run typecheck`. When set, `AGENT_SELF_USER` still ignores all comments from that account regardless of marker.
+
 ### Clarify Review Agent Prompt
 
 Date: 2026-06-23 16:05:46 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.

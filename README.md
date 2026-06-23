@@ -20,7 +20,7 @@ npm install
 
 # 2. Configure
 cp .env.example .env
-# edit .env: GITHUB_TOKEN, REPOS, AGENT_SELF_USER, AGENT (default: zcode)
+# edit .env: GITHUB_TOKEN, REPOS, AGENT (default: zcode); AGENT_SELF_USER optional
 
 # 3. Run
 npm run dev
@@ -36,7 +36,7 @@ All via environment (`.env`):
 | --- | --- | --- | --- |
 | `GITHUB_TOKEN` | yes | — | PAT with repo + PR comment read/write |
 | `REPOS` | yes | — | `owner/repo,owner/repo2` |
-| `AGENT_SELF_USER` | yes | — | this daemon's GitHub username (so it ignores its own comments) |
+| `AGENT_SELF_USER` | no | — | this daemon's GitHub username; when set, comments from it are also ignored. Leave unset for personal-token mode (relies on the marker tag alone) |
 | `POLL_INTERVAL_SEC` | no | `60` | seconds between polls |
 | `COMMENT_BATCH_WINDOW_SEC` | no | `120` | quiet-window seconds for grouping related comments before running an agent |
 | `PR_CONTEXT_HISTORY_LIMIT` | no | `5` | recent PR changelog entries included in an agent prompt |
@@ -55,7 +55,9 @@ New comments are first held in a pending batch. Inline review comments are group
 
 GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains only that repo's cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
 
-The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and also ignores any comment authored by `AGENT_SELF_USER`. So the agent never reacts to its own output.
+The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and skips any comment carrying it, so the agent never reacts to its own output. If `AGENT_SELF_USER` is set, comments authored by that username are ignored too.
+
+Leaving `AGENT_SELF_USER` unset enables **personal-token mode**: the daemon authenticates as you, the marker tag is the only loop guard, and your own comments still trigger it. Use a dedicated bot account and set `AGENT_SELF_USER` to its username if you instead want every comment from that account ignored regardless of the marker.
 
 ## The four extension seams
 
@@ -84,7 +86,7 @@ Then register it in `workflows/registry.ts` alongside `prCommentWorkflow`.
 ## Safety notes
 
 - The agent runs with unattended permissions in an isolated checkout. It only touches its throwaway workdir; the push to the PR uses `--force-with-lease`.
-- Comments authored by `AGENT_SELF_USER` and any comment carrying the marker tag are skipped.
+- Any comment carrying the marker tag is skipped, as are comments authored by `AGENT_SELF_USER` when it is set.
 - Execution is serial — one task at a time — so concurrent PR pushes never race.
 
 ## Layout

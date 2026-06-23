@@ -16,7 +16,7 @@ export interface Config {
   commentBatchHistoryLimit: number;
   processedCommentKeyLimit: number;
   agent: string;
-  agentSelfUser: string;
+  agentSelfUser: string | null;
   stateDir: string;
   zcodeBin: string;
   claudeCodeBin: string;
@@ -63,7 +63,7 @@ export function loadConfig(): Config {
     commentBatchHistoryLimit: Number(optional("COMMENT_BATCH_HISTORY_LIMIT", "20")),
     processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
     agent: optional("AGENT", "zcode"),
-    agentSelfUser: required("AGENT_SELF_USER"),
+    agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
