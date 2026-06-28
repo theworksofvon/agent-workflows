@@ -5,7 +5,7 @@ import { GitHubRepoStateStore } from "../../github/state.js";
 import { prepareWorkdir, cleanupWorkdir } from "../../runner/workdir.js";
 import { runAgent } from "../../runner/executor.js";
 import { buildPrompt } from "./context.js";
-import { commitsAhead, pushBranch } from "./push.js";
+import { commitUncommittedChanges, commitsAhead, pushBranch } from "./push.js";
 import { MARKER_TAG } from "../../github/client.js";
 import { log } from "../../log.js";
 
@@ -51,9 +51,15 @@ export function prCommentWorkflow(): Workflow {
           prompt,
         });
 
-        const ahead = commitsAhead(workdir.path);
         if (result.exitCode !== 0) {
           log.warn("agent exited non-zero", { slug, exitCode: result.exitCode });
+        }
+        const committedLeftovers = commitUncommittedChanges(
+          workdir.path,
+          `Address PR #${prNumber} review comments`,
+        );
+        if (committedLeftovers) {
+          log.info("orchestrator committed leftover agent changes", { slug });
         }
 
         const authors = [...new Set(p.comments.map((c) => c.author))];
@@ -62,6 +68,7 @@ export function prCommentWorkflow(): Workflow {
             ? `@${authors[0]}`
             : authors.map((author) => `@${author}`).join(", ");
         const commentText = `${p.comments.length} comment${p.comments.length === 1 ? "" : "s"}`;
+        const ahead = commitsAhead(workdir.path, headRef);
         let body: string;
         if (ahead > 0) {
           pushBranch(workdir.path, headRef);

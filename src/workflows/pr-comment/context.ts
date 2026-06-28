@@ -12,7 +12,7 @@ export function buildPrompt(
   const lines: string[] = [];
 
   lines.push("You are a coding review agent resolving GitHub pull request feedback.");
-  lines.push("You are running inside an isolated checkout of the PR branch. Review the comments, inspect the repository, make the necessary changes, commit them, and stop.");
+  lines.push("You are running inside an isolated git worktree for the PR branch. Review the comments, inspect the repository, make the necessary changes, commit them, and stop.");
   lines.push("");
   lines.push(`Repository: ${p.repo.owner}/${p.repo.repo}`);
   lines.push(`PR #${p.prNumber}: ${p.prTitle}`);
@@ -69,6 +69,7 @@ export function buildPrompt(
   lines.push("- If your environment supports sub-agents or delegation, use them when it helps split independent comments, investigate unfamiliar areas, or parallelize review context gathering.");
   lines.push("- Keep coordination efficient: group related comments together, avoid duplicate investigation, and reconcile overlapping requests before editing.");
   lines.push("- Prefer one clear commit when the requested changes are related; use multiple commits only when it improves reviewability.");
+  lines.push("- If you make file changes but fail to commit them, the orchestrator will create a fallback commit before pushing.");
   lines.push("- Run the most relevant validation available for the touched area when practical, and mention any validation you could not run in your final response.");
   lines.push("- Reference PR #" + p.prNumber + " in the commit message.");
   lines.push("- Do NOT push; the orchestrator will push for you.");

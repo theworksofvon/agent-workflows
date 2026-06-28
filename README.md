@@ -2,10 +2,10 @@
 
 A local daemon that bridges signals — things that have no native bridge to your coding agents — and routes them to a pluggable coding agent.
 
-**Workflow #1 (built-in):** when a new comment appears on any of your PRs, the daemon clones the PR branch into an isolated workdir, runs your coding agent with rich context (the comment + PR title/body + file + line + diff hunk), and pushes the agent's commits back to the PR branch.
+**Workflow #1 (built-in):** when a new comment appears on any of your PRs, the daemon creates an isolated git worktree for the PR branch, runs your coding agent with rich context (the comment + PR title/body + file + line + diff hunk), and pushes the resulting commits back to the PR branch.
 
 ```
-PR comment ─► poll ─► isolated clone ─► agent (pluggable) ─► push to PR branch
+PR comment ─► poll ─► isolated worktree ─► agent (pluggable) ─► push to PR branch
 ```
 
 ## Why
@@ -43,7 +43,7 @@ All via environment (`.env`):
 | `COMMENT_BATCH_HISTORY_LIMIT` | no | `20` | changelog entries retained per PR |
 | `PROCESSED_COMMENT_KEY_LIMIT` | no | `2000` | recently handled comment keys retained per repo for duplicate protection |
 | `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
-| `STATE_DIR` | no | `./state` | where repo state files + workdirs live (gitignored) |
+| `STATE_DIR` | no | `./state` | where repo state files, cached repos, and worktrees live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
 | `CODEX_BIN` | no | `codex` | path to the codex binary |
@@ -66,7 +66,7 @@ Adding new behavior is meant to be small and local:
 1. **Sources** (`src/sources/types.ts`) — produce events. Today a GitHub poller.
 2. **Workflows** (`src/workflows/`) — handle an event `kind`. Drop a folder in `workflows/`, implement `kind` + `handle`, register it in `workflows/registry.ts`.
 3. **Agent adapters** (`src/agents/`) — which CLI does the work. Add a file implementing `AgentAdapter` and register in `agents/registry.ts`.
-4. **Workdirs** (`src/runner/workdir.ts`) — where the agent runs. Isolated clones today.
+4. **Worktrees** (`src/runner/workdir.ts`) — where the agent runs. Cached repos plus isolated git worktrees today.
 
 ### Example: add a new workflow
 
@@ -85,7 +85,8 @@ Then register it in `workflows/registry.ts` alongside `prCommentWorkflow`.
 
 ## Safety notes
 
-- The agent runs with unattended permissions in an isolated checkout. It only touches its throwaway workdir; the push to the PR uses `--force-with-lease`.
+- The agent runs with unattended permissions in an isolated git worktree. It only touches its managed worktree; the push to the PR uses `--force-with-lease`.
+- If the agent leaves uncommitted edits, the orchestrator creates a fallback commit before pushing.
 - Any comment carrying the marker tag is skipped, as are comments authored by `AGENT_SELF_USER` when it is set.
 - Execution is serial — one task at a time — so concurrent PR pushes never race.
 
@@ -104,7 +105,7 @@ src/
   sources/          Source seam
   agents/           AgentAdapter seam + zcode/claude-code adapters
   workflows/        Workflow seam + pr-comment/
-  runner/           isolated workdir + executor
+  runner/           cached repo/worktree preparation + executor
 ```
 
 ## Status

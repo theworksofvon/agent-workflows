@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Use Git Worktrees For Agent Sessions
+
+Date: 2026-06-28 14:48:56 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
+Task: Replace fresh per-task clones with cached repos and isolated git worktrees.
+Message: Agent sessions now run in managed worktrees under `STATE_DIR/worktrees`, backed by cached mirrors under `STATE_DIR/repos`.
+Added/Changed: Added worktree guardrails, cached mirror fetches, orchestrator fallback commits, and local git-based tests.
+Fixed/Removed: Removes repeated full clone setup from the task path and avoids dropping intended uncommitted changes.
+Handoff: Verified with `npm test` and `npm run typecheck`; no real GitHub or LLM calls are required for this coverage.
+
 ### Make AGENT_SELF_USER Optional For Personal-Token Mode
 
 Date: 2026-06-23 16:51:59 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
