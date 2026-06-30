@@ -63,6 +63,10 @@ export function githubPoller(args: {
     return author.toLowerCase() === config.agentSelfUser.toLowerCase();
   }
 
+  function isBotAuthor(author: string): boolean {
+    return author.toLowerCase().endsWith("[bot]");
+  }
+
   function commentKey(repo: RepoSpec, prNumber: number, kind: "issue" | "review", id: number): string {
     return `${repo.owner}/${repo.repo}#${prNumber}:${kind}:${id}`;
   }
@@ -80,6 +84,7 @@ export function githubPoller(args: {
       for (const c of issueComments) {
         if (c.id <= lastIssue) continue;
         if (isSelf(c.body, c.author)) continue;
+        if (isBotAuthor(c.author)) continue;
         const key = commentKey(repo, pr.number, "issue", c.id);
         if (state.hasProcessedComment(key)) continue;
         state.addPendingComment({

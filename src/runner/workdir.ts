@@ -10,7 +10,9 @@ export interface WorkdirHandle {
   branch: string;
   /** Temporary local branch backing this worktree. */
   localBranch: string;
-  /** Cached mirror repository that owns this worktree. */
+  /** Remote branch SHA this worktree was based on. Used for explicit push leases. */
+  baseSha: string;
+  /** Cached bare repository that owns this worktree. */
   repoCachePath: string;
 }
 
@@ -26,7 +28,7 @@ function git(args: string[], opts: { cwd: string }): string {
 /**
  * Create an isolated checkout of a PR branch using git worktrees.
  *
- * The first task for a repo creates a cached mirror at:
+ * The first task for a repo creates a cached bare repo at:
  *   state/repos/<owner>/<repo>.git
  *
  * Each task then gets its own worktree at:
@@ -59,6 +61,9 @@ export function prepareWorkdir(args: {
   try {
     ensureInside(dir, worktreeBase);
     ensureRepoCache({ repoCachePath, cloneUrl, branch });
+    const baseSha = git(["rev-parse", `refs/remotes/origin/${branch}`], {
+      cwd: repoCachePath,
+    });
     log.info("preparing isolated worktree", { dir, repo, branch });
     git(["worktree", "add", "-B", localBranch, dir, `origin/${branch}`], {
       cwd: repoCachePath,
@@ -66,7 +71,7 @@ export function prepareWorkdir(args: {
     // Ensure git identity is set for commits the agent makes.
     git(["config", "user.name", "agent-workflows"], { cwd: dir });
     git(["config", "user.email", "agent-workflows@users.noreply.github.com"], { cwd: dir });
-    return { path: dir, branch, localBranch, repoCachePath };
+    return { path: dir, branch, localBranch, baseSha, repoCachePath };
   } catch (err) {
     // Clean up a half-made worktree so we don't leave junk.
     cleanupPath(dir, worktreeBase);
@@ -116,8 +121,8 @@ function ensureRepoCache(args: {
   const { repoCachePath, cloneUrl, branch } = args;
   if (!existsSync(repoCachePath)) {
     mkdirSync(resolve(repoCachePath, ".."), { recursive: true });
-    log.info("creating cached repo mirror", { repoCachePath });
-    git(["clone", "--mirror", cloneUrl, repoCachePath], { cwd: resolve(repoCachePath, "..") });
+    log.info("creating cached bare repo", { repoCachePath });
+    git(["clone", "--bare", cloneUrl, repoCachePath], { cwd: resolve(repoCachePath, "..") });
   } else {
     git(["remote", "set-url", "origin", cloneUrl], { cwd: repoCachePath });
   }

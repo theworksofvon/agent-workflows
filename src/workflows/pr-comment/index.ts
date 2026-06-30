@@ -71,7 +71,7 @@ export function prCommentWorkflow(): Workflow {
         const ahead = commitsAhead(workdir.path, headRef);
         let body: string;
         if (ahead > 0) {
-          pushBranch(workdir.path, headRef);
+          pushBranch(workdir.path, headRef, workdir.baseSha);
           body = `${MARKER_TAG} Applied changes for ${authorText}'s ${commentText} (${ahead} commit${ahead > 1 ? "s" : ""}).`;
           log.info("pushed changes", { slug, commits: ahead });
         } else {

@@ -33,7 +33,16 @@ export function commitUncommittedChanges(workdir: string, message: string): bool
  * Push the branch back to origin. Uses force-with-lease to be safe against
  * a teammate pushing in between our fetch and push.
  */
-export function pushBranch(workdir: string, branch: string): void {
-  log.info("pushing branch to origin", { branch });
-  git(["push", "--force-with-lease", "origin", `HEAD:${branch}`], workdir);
+export function pushBranch(workdir: string, branch: string, expectedRemoteSha: string): void {
+  const remoteRef = `refs/heads/${branch}`;
+  log.info("pushing branch to origin", { branch, expectedRemoteSha });
+  git(
+    [
+      "push",
+      `--force-with-lease=${remoteRef}:${expectedRemoteSha}`,
+      "origin",
+      `HEAD:${remoteRef}`,
+    ],
+    workdir,
+  );
 }

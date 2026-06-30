@@ -28,6 +28,15 @@ npm run dev
 
 The daemon polls every 60s (configurable). On new comments it will log its progress and act.
 
+## Testing
+
+```bash
+npm test
+npm run typecheck
+```
+
+The default tests do not call GitHub or any LLM API. They use local git repositories/worktrees and fake agent binaries to verify orchestration and adapter behavior without spending tokens. Real agent/API smoke tests should stay opt-in.
+
 ## Configuration
 
 All via environment (`.env`):
@@ -43,7 +52,7 @@ All via environment (`.env`):
 | `COMMENT_BATCH_HISTORY_LIMIT` | no | `20` | changelog entries retained per PR |
 | `PROCESSED_COMMENT_KEY_LIMIT` | no | `2000` | recently handled comment keys retained per repo for duplicate protection |
 | `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
-| `STATE_DIR` | no | `./state` | where repo state files, cached repos, and worktrees live (gitignored) |
+| `STATE_DIR` | no | `./state` | where repo state files, cached bare repos, and worktrees live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
 | `CODEX_BIN` | no | `codex` | path to the codex binary |
@@ -54,6 +63,8 @@ All via environment (`.env`):
 New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
 
 GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains only that repo's cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
+
+Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
 
 The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and skips any comment carrying it, so the agent never reacts to its own output. If `AGENT_SELF_USER` is set, comments authored by that username are ignored too.
 
@@ -85,7 +96,7 @@ Then register it in `workflows/registry.ts` alongside `prCommentWorkflow`.
 
 ## Safety notes
 
-- The agent runs with unattended permissions in an isolated git worktree. It only touches its managed worktree; the push to the PR uses `--force-with-lease`.
+- The agent runs with unattended permissions in an isolated git worktree. It only touches its managed worktree; the push to the PR uses an explicit `--force-with-lease` pinned to the branch SHA captured when the worktree was created.
 - If the agent leaves uncommitted edits, the orchestrator creates a fallback commit before pushing.
 - Any comment carrying the marker tag is skipped, as are comments authored by `AGENT_SELF_USER` when it is set.
 - Execution is serial — one task at a time — so concurrent PR pushes never race.

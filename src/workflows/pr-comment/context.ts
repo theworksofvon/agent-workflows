@@ -70,7 +70,8 @@ export function buildPrompt(
   lines.push("- Keep coordination efficient: group related comments together, avoid duplicate investigation, and reconcile overlapping requests before editing.");
   lines.push("- Prefer one clear commit when the requested changes are related; use multiple commits only when it improves reviewability.");
   lines.push("- If you make file changes but fail to commit them, the orchestrator will create a fallback commit before pushing.");
-  lines.push("- Run the most relevant validation available for the touched area when practical, and mention any validation you could not run in your final response.");
+  lines.push("- Before committing, run the repository's relevant validation for the touched area. Inspect docs, package scripts, CI config, or existing contributor guidance to choose the right commands.");
+  lines.push("- If validation fails, fix the issue and rerun the relevant checks. If a required check cannot be run, explain why in your final response.");
   lines.push("- Reference PR #" + p.prNumber + " in the commit message.");
   lines.push("- Do NOT push; the orchestrator will push for you.");
   lines.push("- Do NOT amend or rewrite unrelated history.");

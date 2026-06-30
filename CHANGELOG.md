@@ -2,13 +2,40 @@
 
 ## Unreleased
 
+### Process Only Inline Bot Review Comments
+
+Date: 2026-06-29 14:49:47 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.
+Task: Avoid spending agent runs on bot-authored top-level status comments.
+Message: Bot conversation comments are ignored, but bot inline review comments remain actionable.
+Added/Changed: Simplified poller filtering and strengthened prompt validation requirements.
+Fixed/Removed: Prevents CodeRabbit follow-up/status comments from spawning no-op agents.
+Handoff: Local-only; run `npm test` and `npm run typecheck` before commit.
+
+### Use Explicit Push Leases For Worktree Branches
+
+Date: 2026-06-29 14:23:34 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.
+Task: Keep unique local worktree branches while making pushes safe and deterministic.
+Message: Worktree handles now record the remote branch base SHA and push with an explicit `--force-with-lease`.
+Added/Changed: Updated branch push logic and local git tests for successful pushes plus stale-remote rejection.
+Fixed/Removed: Avoids ambiguous stale tracking refs while preserving concurrent worktree isolation.
+Handoff: Local-only; run `npm test` and `npm run typecheck`, then retry PR #11.
+
+### Add No-Token Agent Adapter Tests
+
+Date: 2026-06-28 15:23:00 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.
+Task: Add a cheap test flow for model-facing adapters without real LLM calls.
+Message: Agent adapters now run against fake local binaries that capture argv, cwd, and stdin.
+Added/Changed: Added `tests/agent-adapters.test.ts` and documented no-token testing in README.
+Fixed/Removed: Avoids spending tokens for normal adapter/orchestration validation.
+Handoff: Local-only; run `npm test` and `npm run typecheck` before commit.
+
 ### Use Git Worktrees For Agent Sessions
 
 Date: 2026-06-28 14:48:56 CDT; Status: Completed; PR: Pending on `feature/comment-batching`.
 Task: Replace fresh per-task clones with cached repos and isolated git worktrees.
-Message: Agent sessions now run in managed worktrees under `STATE_DIR/worktrees`, backed by cached mirrors under `STATE_DIR/repos`.
+Message: Agent sessions now run in managed worktrees under `STATE_DIR/worktrees`, backed by cached bare repos under `STATE_DIR/repos`.
 Added/Changed: Added worktree guardrails, cached mirror fetches, orchestrator fallback commits, and local git-based tests.
-Fixed/Removed: Removes repeated full clone setup from the task path and avoids dropping intended uncommitted changes.
+Fixed/Removed: Removes repeated full clone setup from the task path, avoids mirror-push refspec failures, and avoids dropping intended uncommitted changes.
 Handoff: Verified with `npm test` and `npm run typecheck`; no real GitHub or LLM calls are required for this coverage.
 
 ### Make AGENT_SELF_USER Optional For Personal-Token Mode
