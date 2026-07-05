@@ -48,6 +48,14 @@ npm run typecheck
 
 The default tests do not call GitHub or any LLM API. They use local git repositories/worktrees and fake agent binaries to verify orchestration and adapter behavior without spending tokens. Real agent/API smoke tests should stay opt-in.
 
+GitHub Actions runs the same baseline checks on pull requests and pushes to `main`:
+
+```bash
+npm ci
+npm run typecheck
+npm test
+```
+
 ## Configuration
 
 All via environment (`.env`):
@@ -78,6 +86,8 @@ All via environment (`.env`):
 New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
 
 GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains per-PR cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
+
+Draft PRs are skipped. When a draft becomes ready for review, per-PR cursors allow the daemon to pick up comments from that PR without another PR's newer comments hiding them.
 
 Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
 
