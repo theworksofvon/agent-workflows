@@ -1,5 +1,4 @@
 import { loadConfig } from "./config.js";
-import { Store } from "./store.js";
 import { GitHubClient } from "./github/client.js";
 import { githubPoller } from "./github/poller.js";
 import { getAgent } from "./agents/registry.js";
@@ -9,14 +8,13 @@ import { log } from "./log.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const store = new Store(config.stateDir);
   const client = new GitHubClient(config.githubToken);
   const agent = getAgent(config.agent, config);
 
   registerBuiltins();
 
-  const source = githubPoller({ config, store, client });
-  const daemon = new Daemon(config, store, source, client, agent);
+  const source = githubPoller({ config, client });
+  const daemon = new Daemon(config, source, client, agent);
 
   // Graceful shutdown.
   const stop = (sig: string) => {

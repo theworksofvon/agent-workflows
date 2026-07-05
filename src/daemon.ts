@@ -1,5 +1,4 @@
 import type { Config } from "./config.js";
-import type { Store } from "./store.js";
 import type { Source } from "./sources/types.js";
 import type { RunCtx } from "./workflows/types.js";
 import type { GitHubClient } from "./github/client.js";
@@ -10,7 +9,7 @@ import { log } from "./log.js";
 
 /**
  * The daemon: owns the poll loop, the serial queue, and dispatches events to
- * the matching workflow. Building the RunCtx (config + store + agent + the
+ * the matching workflow. Building the RunCtx (config + agent + the
  * marker-comment helper) happens here so workflows stay pure.
  */
 export class Daemon {
@@ -19,7 +18,6 @@ export class Daemon {
 
   constructor(
     private readonly config: Config,
-    private readonly store: Store,
     private readonly source: Source,
     private readonly client: GitHubClient,
     private readonly agent: AgentAdapter,
@@ -70,7 +68,6 @@ export class Daemon {
   private makeRunCtx(): RunCtx {
     return {
       config: this.config,
-      store: this.store,
       agent: this.agent,
       postMarkerComment: async ({ repo, prNumber, body }) => {
         await this.client.createComment(repo, prNumber, body);

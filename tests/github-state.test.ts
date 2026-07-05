@@ -1,0 +1,92 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { GitHubRepoStateStore } from "../src/github/state.js";
+import type { PRCommentPayload } from "../src/github/poller.js";
+
+function makeState(root: string): GitHubRepoStateStore {
+  return new GitHubRepoStateStore(
+    join(root, "state"),
+    { owner: "local-owner", repo: "sample-repo" },
+    { processedCommentKeyLimit: 20, commentBatchHistoryLimit: 20 },
+  );
+}
+
+test("ready batches are not marked processed until completed", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-"));
+  try {
+    const state = makeState(root);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      now: 1_000,
+      pr: {
+        number: 1,
+        title: "Test PR",
+        body: null,
+        headRef: "feature/test",
+        baseRef: "main",
+      },
+      comment: {
+        key: "local-owner/sample-repo#1:review:100",
+        id: 100,
+        kind: "review",
+        author: "reviewer",
+        body: "please fix",
+        createdAt: new Date(1_000).toISOString(),
+      },
+    });
+
+    const [batch] = state.takeReadyCommentBatches(2_000, 0);
+    assert.equal(batch.comments.length, 1);
+    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), false);
+
+    state.markBatchCompleted(batch);
+    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retryable failures pause and later re-emit the batch", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-retry-"));
+  try {
+    const state = makeState(root);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      now: 1_000,
+      pr: {
+        number: 1,
+        title: "Test PR",
+        body: null,
+        headRef: "feature/test",
+        baseRef: "main",
+      },
+      comment: {
+        key: "local-owner/sample-repo#1:review:100",
+        id: 100,
+        kind: "review",
+        author: "reviewer",
+        body: "please fix",
+        createdAt: new Date(1_000).toISOString(),
+      },
+    });
+
+    const [firstAttempt] = state.takeReadyCommentBatches(2_000, 0);
+    assert.equal(firstAttempt.attempts, 1);
+    state.pauseBatchForRetry({
+      batch: firstAttempt as PRCommentPayload,
+      retryAfterMs: 5_000,
+      error: "usage limit reached",
+    });
+
+    assert.deepEqual(state.takeReadyCommentBatches(4_000, 0), []);
+    const [secondAttempt] = state.takeReadyCommentBatches(5_000, 0);
+    assert.equal(secondAttempt.attempts, 2);
+    assert.equal(secondAttempt.comments[0].key, "local-owner/sample-repo#1:review:100");
+    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

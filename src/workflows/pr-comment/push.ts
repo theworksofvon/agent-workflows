@@ -6,9 +6,9 @@ function git(args: string[], cwd: string): string {
 }
 
 /** Count commits on the branch ahead of origin. */
-export function commitsAhead(workdir: string): number {
+export function commitsAhead(workdir: string, branch: string): number {
   try {
-    const out = git(["rev-list", "--count", "HEAD", "^origin/HEAD"], workdir);
+    const out = git(["rev-list", "--count", "HEAD", `^origin/${branch}`], workdir);
     return Number(out) || 0;
   } catch {
     // origin/HEAD may not exist; fall back to status.
@@ -17,11 +17,32 @@ export function commitsAhead(workdir: string): number {
   }
 }
 
+export function hasUncommittedChanges(workdir: string): boolean {
+  return git(["status", "--porcelain"], workdir) !== "";
+}
+
+export function commitUncommittedChanges(workdir: string, message: string): boolean {
+  if (!hasUncommittedChanges(workdir)) return false;
+  log.info("committing uncommitted agent changes", { message });
+  git(["add", "-A"], workdir);
+  git(["commit", "-m", message], workdir);
+  return true;
+}
+
 /**
  * Push the branch back to origin. Uses force-with-lease to be safe against
  * a teammate pushing in between our fetch and push.
  */
-export function pushBranch(workdir: string, branch: string): void {
-  log.info("pushing branch to origin", { branch });
-  git(["push", "--force-with-lease", "origin", `HEAD:${branch}`], workdir);
+export function pushBranch(workdir: string, branch: string, expectedRemoteSha: string): void {
+  const remoteRef = `refs/heads/${branch}`;
+  log.info("pushing branch to origin", { branch, expectedRemoteSha });
+  git(
+    [
+      "push",
+      `--force-with-lease=${remoteRef}:${expectedRemoteSha}`,
+      "origin",
+      `HEAD:${remoteRef}`,
+    ],
+    workdir,
+  );
 }

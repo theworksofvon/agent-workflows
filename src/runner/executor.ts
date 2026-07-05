@@ -15,6 +15,7 @@ export async function runAgent(
     agent: agent.name,
     exitCode: res.exitCode,
     stdoutTail: res.stdout.slice(-200),
+    stderrTail: res.stderr.slice(-500),
   });
   return res;
 }

@@ -75,6 +75,7 @@ export class GitHubClient {
       originalLine: number | null;
       diffHunk: string;
       createdAt: string;
+      reviewId: number | null;
     }>
   > {
     const res = await this.octokit.rest.pulls.listReviewComments({
@@ -85,16 +86,20 @@ export class GitHubClient {
     });
     return res.data
       .filter((c) => (since ? Number(new Date(c.created_at)) > since : true))
-      .map((c) => ({
-        id: c.id,
-        author: c.user?.login ?? "unknown",
-        body: c.body ?? "",
-        path: c.path,
-        line: c.line ?? null,
-        originalLine: c.original_line ?? null,
-        diffHunk: c.diff_hunk,
-        createdAt: c.created_at,
-      }));
+      .map((c) => {
+        const comment = c as typeof c & { pull_request_review_id?: number | null };
+        return {
+          id: c.id,
+          author: c.user?.login ?? "unknown",
+          body: c.body ?? "",
+          path: c.path,
+          line: c.line ?? null,
+          originalLine: c.original_line ?? null,
+          diffHunk: c.diff_hunk,
+          createdAt: c.created_at,
+          reviewId: comment.pull_request_review_id ?? null,
+        };
+      });
   }
 
   async createComment(

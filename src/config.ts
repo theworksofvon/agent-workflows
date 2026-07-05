@@ -11,11 +11,18 @@ export interface Config {
   githubToken: string;
   repos: RepoSpec[];
   pollIntervalSec: number;
+  commentBatchWindowSec: number;
+  prContextHistoryLimit: number;
+  commentBatchHistoryLimit: number;
+  processedCommentKeyLimit: number;
+  agentRetryDelaySec: number;
+  agentMaxAttempts: number;
   agent: string;
-  agentSelfUser: string;
+  agentSelfUser: string | null;
   stateDir: string;
   zcodeBin: string;
   claudeCodeBin: string;
+  codexBin: string;
   keepWorkdirs: boolean;
 }
 
@@ -53,16 +60,41 @@ export function loadConfig(): Config {
     githubToken: required("GITHUB_TOKEN"),
     repos: parseRepos(required("REPOS")),
     pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
+    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "120")),
+    prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
+    commentBatchHistoryLimit: Number(optional("COMMENT_BATCH_HISTORY_LIMIT", "20")),
+    processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
+    agentRetryDelaySec: Number(optional("AGENT_RETRY_DELAY_SEC", "1800")),
+    agentMaxAttempts: Number(optional("AGENT_MAX_ATTEMPTS", "5")),
     agent: optional("AGENT", "zcode"),
-    agentSelfUser: required("AGENT_SELF_USER"),
+    agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
+    codexBin: optional("CODEX_BIN", "codex"),
     keepWorkdirs: optional("KEEP_WORKDIRS", "false") === "true",
   };
 
   if (!Number.isFinite(cfg.pollIntervalSec) || cfg.pollIntervalSec < 5) {
     throw new Error("POLL_INTERVAL_SEC must be a number >= 5.");
+  }
+  if (!Number.isFinite(cfg.commentBatchWindowSec) || cfg.commentBatchWindowSec < 0) {
+    throw new Error("COMMENT_BATCH_WINDOW_SEC must be a number >= 0.");
+  }
+  if (!Number.isInteger(cfg.prContextHistoryLimit) || cfg.prContextHistoryLimit < 0) {
+    throw new Error("PR_CONTEXT_HISTORY_LIMIT must be an integer >= 0.");
+  }
+  if (!Number.isInteger(cfg.commentBatchHistoryLimit) || cfg.commentBatchHistoryLimit < 0) {
+    throw new Error("COMMENT_BATCH_HISTORY_LIMIT must be an integer >= 0.");
+  }
+  if (!Number.isInteger(cfg.processedCommentKeyLimit) || cfg.processedCommentKeyLimit < 0) {
+    throw new Error("PROCESSED_COMMENT_KEY_LIMIT must be an integer >= 0.");
+  }
+  if (!Number.isFinite(cfg.agentRetryDelaySec) || cfg.agentRetryDelaySec < 0) {
+    throw new Error("AGENT_RETRY_DELAY_SEC must be a number >= 0.");
+  }
+  if (!Number.isInteger(cfg.agentMaxAttempts) || cfg.agentMaxAttempts < 1) {
+    throw new Error("AGENT_MAX_ATTEMPTS must be an integer >= 1.");
   }
   if (cfg.repos.length === 0) {
     throw new Error("REPOS must list at least one owner/repo.");
@@ -72,6 +104,10 @@ export function loadConfig(): Config {
     repos: cfg.repos.map((r) => `${r.owner}/${r.repo}`),
     agent: cfg.agent,
     pollIntervalSec: cfg.pollIntervalSec,
+    commentBatchWindowSec: cfg.commentBatchWindowSec,
+    prContextHistoryLimit: cfg.prContextHistoryLimit,
+    agentRetryDelaySec: cfg.agentRetryDelaySec,
+    agentMaxAttempts: cfg.agentMaxAttempts,
     stateDir: cfg.stateDir,
   });
   return cfg;
