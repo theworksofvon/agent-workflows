@@ -42,6 +42,7 @@ export interface PRCommentPayload {
   groupKey: string;
   firstSeenAt: string;
   lastSeenAt: string;
+  attempts: number;
   comments: PRCommentItem[];
 }
 

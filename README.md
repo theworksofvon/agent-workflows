@@ -51,6 +51,8 @@ All via environment (`.env`):
 | `PR_CONTEXT_HISTORY_LIMIT` | no | `5` | recent PR changelog entries included in an agent prompt |
 | `COMMENT_BATCH_HISTORY_LIMIT` | no | `20` | changelog entries retained per PR |
 | `PROCESSED_COMMENT_KEY_LIMIT` | no | `2000` | recently handled comment keys retained per repo for duplicate protection |
+| `AGENT_RETRY_DELAY_SEC` | no | `1800` | seconds to pause retryable agent failures before trying again |
+| `AGENT_MAX_ATTEMPTS` | no | `5` | maximum attempts for a retryable comment batch |
 | `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
 | `STATE_DIR` | no | `./state` | where repo state files, cached bare repos, and worktrees live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
@@ -67,6 +69,8 @@ GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each f
 Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
 
 The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and skips any comment carrying it, so the agent never reacts to its own output. If `AGENT_SELF_USER` is set, comments authored by that username are ignored too.
+
+Retryable agent failures such as rate limits, usage limits, quota errors, and temporary capacity errors are paused and retried later instead of being marked processed. A batch is marked processed only after the workflow completes.
 
 Leaving `AGENT_SELF_USER` unset enables **personal-token mode**: the daemon authenticates as you, the marker tag is the only loop guard, and your own comments still trigger it. Use a dedicated bot account and set `AGENT_SELF_USER` to its username if you instead want every comment from that account ignored regardless of the marker.
 

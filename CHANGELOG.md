@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Pause Retryable Agent Failures
+
+Date: 2026-07-03 12:56:58 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.
+Task: Keep usage/rate-limit failures retryable instead of marking comments processed.
+Message: Retryable agent failures now pause batches with retry timing and preserve them for a later attempt.
+Added/Changed: Added retry config, stderr-tail logging, delayed batch retry state, and completion-only processed marking.
+Fixed/Removed: Prevents failed Codex usage-limit runs from permanently consuming review comments.
+Handoff: Local-only; run `npm test` and `npm run typecheck`, then inspect paused batches in per-repo state.
+
 ### Process Only Inline Bot Review Comments
 
 Date: 2026-06-29 14:49:47 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.

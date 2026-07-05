@@ -52,7 +52,29 @@ export function prCommentWorkflow(): Workflow {
         });
 
         if (result.exitCode !== 0) {
-          log.warn("agent exited non-zero", { slug, exitCode: result.exitCode });
+          log.warn("agent exited non-zero", {
+            slug,
+            exitCode: result.exitCode,
+            retryable: isRetryableAgentFailure(result.stderr + "\n" + result.stdout),
+          });
+          if (
+            isRetryableAgentFailure(result.stderr + "\n" + result.stdout) &&
+            p.attempts < ctx.config.agentMaxAttempts
+          ) {
+            const retryAfterMs = Date.now() + ctx.config.agentRetryDelaySec * 1000;
+            repoState.pauseBatchForRetry({
+              batch: p,
+              retryAfterMs,
+              error: result.stderr.slice(-1000) || result.stdout.slice(-1000),
+            });
+            log.warn("paused batch for retry", {
+              slug,
+              batchId: p.batchId,
+              attempts: p.attempts,
+              retryAfter: new Date(retryAfterMs).toISOString(),
+            });
+            return;
+          }
         }
         const committedLeftovers = commitUncommittedChanges(
           workdir.path,
@@ -89,11 +111,26 @@ export function prCommentWorkflow(): Workflow {
           commentKeys: p.comments.map((c) => c.key),
           summary: summarizeBatch(p, ahead),
         });
+        repoState.markBatchCompleted(p);
       } finally {
         cleanupWorkdir(workdir, ctx.config.keepWorkdirs);
       }
     },
   };
+}
+
+function isRetryableAgentFailure(output: string): boolean {
+  const normalized = output.toLowerCase();
+  return [
+    "rate limit",
+    "usage limit",
+    "quota",
+    "too many requests",
+    "429",
+    "temporarily unavailable",
+    "try again later",
+    "capacity",
+  ].some((needle) => normalized.includes(needle));
 }
 
 function summarizeBatch(p: PRCommentPayload, commitCount: number): string {

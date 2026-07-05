@@ -15,6 +15,8 @@ export interface Config {
   prContextHistoryLimit: number;
   commentBatchHistoryLimit: number;
   processedCommentKeyLimit: number;
+  agentRetryDelaySec: number;
+  agentMaxAttempts: number;
   agent: string;
   agentSelfUser: string | null;
   stateDir: string;
@@ -62,6 +64,8 @@ export function loadConfig(): Config {
     prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
     commentBatchHistoryLimit: Number(optional("COMMENT_BATCH_HISTORY_LIMIT", "20")),
     processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
+    agentRetryDelaySec: Number(optional("AGENT_RETRY_DELAY_SEC", "1800")),
+    agentMaxAttempts: Number(optional("AGENT_MAX_ATTEMPTS", "5")),
     agent: optional("AGENT", "zcode"),
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
@@ -86,6 +90,12 @@ export function loadConfig(): Config {
   if (!Number.isInteger(cfg.processedCommentKeyLimit) || cfg.processedCommentKeyLimit < 0) {
     throw new Error("PROCESSED_COMMENT_KEY_LIMIT must be an integer >= 0.");
   }
+  if (!Number.isFinite(cfg.agentRetryDelaySec) || cfg.agentRetryDelaySec < 0) {
+    throw new Error("AGENT_RETRY_DELAY_SEC must be a number >= 0.");
+  }
+  if (!Number.isInteger(cfg.agentMaxAttempts) || cfg.agentMaxAttempts < 1) {
+    throw new Error("AGENT_MAX_ATTEMPTS must be an integer >= 1.");
+  }
   if (cfg.repos.length === 0) {
     throw new Error("REPOS must list at least one owner/repo.");
   }
@@ -96,6 +106,8 @@ export function loadConfig(): Config {
     pollIntervalSec: cfg.pollIntervalSec,
     commentBatchWindowSec: cfg.commentBatchWindowSec,
     prContextHistoryLimit: cfg.prContextHistoryLimit,
+    agentRetryDelaySec: cfg.agentRetryDelaySec,
+    agentMaxAttempts: cfg.agentMaxAttempts,
     stateDir: cfg.stateDir,
   });
   return cfg;

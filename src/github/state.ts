@@ -16,6 +16,8 @@ export interface GitHubRepoCursors {
 export interface PendingCommentGroup extends PRCommentPayload {
   firstSeenAtMs: number;
   lastSeenAtMs: number;
+  retryAfterMs?: number;
+  lastError?: string;
 }
 
 export interface GitHubPullRequestState {
@@ -126,8 +128,11 @@ export class GitHubRepoStateStore {
       groupKey,
       firstSeenAt: new Date(firstSeenAtMs).toISOString(),
       lastSeenAt: new Date(now).toISOString(),
+      attempts: existing?.attempts ?? 0,
       firstSeenAtMs,
       lastSeenAtMs: now,
+      retryAfterMs: existing?.retryAfterMs,
+      lastError: existing?.lastError,
       comments: [...comments, comment].sort((a, b) => {
         const byTime = Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
         return byTime === 0 ? a.id - b.id : byTime;
@@ -139,7 +144,11 @@ export class GitHubRepoStateStore {
   takeReadyCommentBatches(now: number, windowMs: number): PRCommentPayload[] {
     const ready: PRCommentPayload[] = [];
     for (const [groupKey, group] of Object.entries(this.state.pendingCommentGroups)) {
+      if (group.retryAfterMs !== undefined && now < group.retryAfterMs) continue;
       if (now - group.lastSeenAtMs < windowMs) continue;
+      group.attempts += 1;
+      group.retryAfterMs = undefined;
+      group.lastError = undefined;
       ready.push({
         repo: group.repo,
         prNumber: group.prNumber,
@@ -151,17 +160,34 @@ export class GitHubRepoStateStore {
         groupKey: group.groupKey,
         firstSeenAt: group.firstSeenAt,
         lastSeenAt: group.lastSeenAt,
+        attempts: group.attempts,
         comments: group.comments,
       });
       delete this.state.pendingCommentGroups[groupKey];
     }
 
-    if (ready.length > 0) {
-      this.markCommentsProcessed(ready.flatMap((batch) => batch.comments.map((c) => c.key)));
-    } else {
-      this.persist();
-    }
+    this.persist();
     return ready;
+  }
+
+  markBatchCompleted(batch: PRCommentPayload): void {
+    this.markCommentsProcessed(batch.comments.map((comment) => comment.key));
+  }
+
+  pauseBatchForRetry(args: {
+    batch: PRCommentPayload;
+    retryAfterMs: number;
+    error: string;
+  }): void {
+    const { batch, retryAfterMs, error } = args;
+    this.state.pendingCommentGroups[batch.groupKey] = {
+      ...batch,
+      firstSeenAtMs: Number(new Date(batch.firstSeenAt)),
+      lastSeenAtMs: Number(new Date(batch.lastSeenAt)),
+      retryAfterMs,
+      lastError: error,
+    };
+    this.persist();
   }
 
   getRecentPrHistory(prNumber: number, limit: number): PRCommentBatchHistory[] {
