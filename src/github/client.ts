@@ -12,6 +12,29 @@ export interface RepoRef {
   repo: string;
 }
 
+export interface PullRequestDetails {
+  number: number;
+  title: string;
+  body: string | null;
+  headRef: string;
+  baseRef: string;
+  draft: boolean;
+}
+
+export interface PullRequestFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string | null;
+}
+
+export interface PullRequestReviewComment {
+  path: string;
+  line: number;
+  body: string;
+}
+
 export class GitHubClient {
   readonly octokit: Octokit;
 
@@ -21,7 +44,7 @@ export class GitHubClient {
 
   /** List open PRs for a repo. */
   async listOpenPRs(ref: RepoRef): Promise<
-    Array<{ number: number; title: string; body: string | null; headRef: string; baseRef: string }>
+    PullRequestDetails[]
   > {
     const res = await this.octokit.rest.pulls.list({
       owner: ref.owner,
@@ -35,6 +58,7 @@ export class GitHubClient {
       body: p.body,
       headRef: p.head.ref,
       baseRef: p.base.ref,
+      draft: p.draft ?? false,
     }));
   }
 
@@ -112,6 +136,59 @@ export class GitHubClient {
       repo: ref.repo,
       issue_number: prNumber,
       body,
+    });
+  }
+
+  async getPullRequest(ref: RepoRef, prNumber: number): Promise<PullRequestDetails> {
+    const res = await this.octokit.rest.pulls.get({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: prNumber,
+    });
+    return {
+      number: res.data.number,
+      title: res.data.title,
+      body: res.data.body,
+      headRef: res.data.head.ref,
+      baseRef: res.data.base.ref,
+      draft: res.data.draft ?? false,
+    };
+  }
+
+  async listPullRequestFiles(ref: RepoRef, prNumber: number): Promise<PullRequestFile[]> {
+    const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return files.map((file) => ({
+      path: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      patch: file.patch ?? null,
+    }));
+  }
+
+  async createPullRequestReview(args: {
+    ref: RepoRef;
+    prNumber: number;
+    body: string;
+    comments: PullRequestReviewComment[];
+  }): Promise<void> {
+    await this.octokit.rest.pulls.createReview({
+      owner: args.ref.owner,
+      repo: args.ref.repo,
+      pull_number: args.prNumber,
+      event: "COMMENT",
+      body: args.body,
+      comments: args.comments.map((comment) => ({
+        path: comment.path,
+        line: comment.line,
+        side: "RIGHT" as const,
+        body: comment.body,
+      })),
     });
   }
 }

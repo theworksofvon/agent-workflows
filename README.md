@@ -28,6 +28,17 @@ npm run dev
 
 The daemon polls every 60s (configurable). On new comments it will log its progress and act.
 
+Manual review-only mode is available when you want the configured agent to review a PR without making changes:
+
+```bash
+npm run review -- owner/repo#123
+npm run review -- https://github.com/owner/repo/pull/123 --post
+```
+
+Review mode runs in an isolated worktree, asks for actionable PR findings only, and never commits or pushes. It dry-runs by default; pass `--post` to submit one grouped GitHub review.
+
+See [docs/pr-review-mode.md](docs/pr-review-mode.md) for the short usage guide.
+
 ## Testing
 
 ```bash
@@ -59,6 +70,8 @@ All via environment (`.env`):
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
 | `CODEX_BIN` | no | `codex` | path to the codex binary |
 | `KEEP_WORKDIRS` | no | `false` | keep per-task workdirs for debugging |
+
+`REPOS` is required for daemon polling. Manual review mode can target any PR your `GITHUB_TOKEN` can read/write, even when that repo is not listed in `REPOS`.
 
 ## Comment batching and loop prevention
 

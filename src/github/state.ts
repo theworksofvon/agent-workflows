@@ -22,6 +22,8 @@ export interface PendingCommentGroup extends PRCommentPayload {
 
 export interface GitHubPullRequestState {
   commentBatchHistory: PRCommentBatchHistory[];
+  reviewRunHistory: PRReviewRunHistory[];
+  postedReviewFindingKeys: string[];
 }
 
 export interface GitHubRepoState {
@@ -37,6 +39,16 @@ export interface PullRequestSnapshot {
   body: string | null;
   headRef: string;
   baseRef: string;
+  draft?: boolean;
+}
+
+export interface PRReviewRunHistory {
+  reviewedAt: string;
+  agent: string;
+  findingCount: number;
+  postedFindingCount: number;
+  dryRun: boolean;
+  summary: string;
 }
 
 const defaultState = (): GitHubRepoState => ({
@@ -197,11 +209,40 @@ export class GitHubRepoStateStore {
 
   recordPrHistory(prNumber: number, entry: PRCommentBatchHistory): void {
     const key = String(prNumber);
-    const prState = this.state.prs[key] ?? { commentBatchHistory: [] };
+    const prState = this.state.prs[key] ?? defaultPullRequestState();
     prState.commentBatchHistory = takeLatest(
       [...prState.commentBatchHistory, entry],
       this.limits.commentBatchHistoryLimit,
     );
+    this.state.prs[key] = prState;
+    this.persist();
+  }
+
+  getPostedReviewFindingKeys(prNumber: number): string[] {
+    return this.state.prs[String(prNumber)]?.postedReviewFindingKeys ?? [];
+  }
+
+  recordReviewRun(args: {
+    prNumber: number;
+    entry: PRReviewRunHistory;
+    postedFindingKeys: string[];
+  }): void {
+    const key = String(args.prNumber);
+    const prState = this.state.prs[key] ?? defaultPullRequestState();
+    prState.reviewRunHistory = takeLatest(
+      [...prState.reviewRunHistory, args.entry],
+      this.limits.commentBatchHistoryLimit,
+    );
+    if (args.postedFindingKeys.length > 0) {
+      const seen = new Set(prState.postedReviewFindingKeys);
+      for (const findingKey of args.postedFindingKeys) {
+        seen.add(findingKey);
+      }
+      prState.postedReviewFindingKeys = takeLatest(
+        [...seen],
+        this.limits.processedCommentKeyLimit,
+      );
+    }
     this.state.prs[key] = prState;
     this.persist();
   }
@@ -243,8 +284,24 @@ function takeLatest<T>(items: T[], limit: number): T[] {
   return limit <= 0 ? [] : items.slice(-limit);
 }
 
+function defaultPullRequestState(): GitHubPullRequestState {
+  return {
+    commentBatchHistory: [],
+    reviewRunHistory: [],
+    postedReviewFindingKeys: [],
+  };
+}
+
 function normalizeState(raw: unknown): GitHubRepoState {
   const state = raw as Partial<GitHubRepoState>;
+  const prs: Record<string, GitHubPullRequestState> = {};
+  for (const [prNumber, prState] of Object.entries(state.prs ?? {})) {
+    prs[prNumber] = {
+      commentBatchHistory: prState.commentBatchHistory ?? [],
+      reviewRunHistory: prState.reviewRunHistory ?? [],
+      postedReviewFindingKeys: prState.postedReviewFindingKeys ?? [],
+    };
+  }
   return {
     cursors: {
       issueCommentId: state.cursors?.issueCommentId ?? 0,
@@ -252,6 +309,6 @@ function normalizeState(raw: unknown): GitHubRepoState {
     },
     pendingCommentGroups: state.pendingCommentGroups ?? {},
     processedCommentKeys: state.processedCommentKeys ?? [],
-    prs: state.prs ?? {},
+    prs,
   };
 }

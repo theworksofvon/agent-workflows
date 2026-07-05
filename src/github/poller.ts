@@ -79,6 +79,14 @@ export function githubPoller(args: {
     const prs = await client.listOpenPRs(repo);
 
     for (const pr of prs) {
+      if (pr.draft) {
+        log.debug("skipping draft pr", {
+          repo: `${repo.owner}/${repo.repo}`,
+          prNumber: pr.number,
+        });
+        continue;
+      }
+
       // --- conversation comments ---
       const lastIssue = state.issueCommentCursor;
       const issueComments = await client.listIssueComments(repo, pr.number);

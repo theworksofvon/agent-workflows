@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Add Manual PR Review Mode
+
+Date: 2026-07-04 20:44:00 CDT; Status: In Progress; PR: Pending on `codex/pr-review-workflow`.
+Task: Let the configured agent review a specific PR without making code changes.
+Message: `npm run review -- owner/repo#123` now dry-runs actionable findings, with `--post` submitting one grouped GitHub review.
+Added/Changed: Added PR review target parsing, read-only review prompts, JSON finding parsing, duplicate suppression, and review state.
+Fixed/Removed: Keeps review-only runs from committing, pushing, or reposting the same finding.
+Handoff: Verify with `npm test` and `npm run typecheck`; review mode uses the configured `AGENT`, not a Codex-only path.
+
 ### Pause Retryable Agent Failures
 
 Date: 2026-07-03 12:56:58 CDT; Status: In Progress; PR: Pending on `feature/comment-batching`.
