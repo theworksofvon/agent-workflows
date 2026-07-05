@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Add GitHub Actions CI
+
+Date: 2026-07-05 13:36:00 CDT; Status: In Progress; PR: Pending on `codex/ci-checks`.
+Task: Add baseline CI for this service.
+Message: Pull requests and pushes to main now run dependency install, typecheck, and the no-token test suite.
+Added/Changed: Added `.github/workflows/ci.yml` with Node 24, npm cache, `npm ci`, `npm run typecheck`, and `npm test`.
+Fixed/Removed: No external GitHub or LLM calls are required for CI.
+Handoff: Local equivalent is `npm ci && npm run typecheck && npm test`; real PR E2E should stay opt-in.
+
 ### Validate Review Findings Before Posting
 
 Date: 2026-07-05 13:15:00 CDT; Status: In Progress; PR: Pending on `codex/pr-review-workflow`.
