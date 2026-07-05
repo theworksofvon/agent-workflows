@@ -262,6 +262,75 @@ test("post mode submits one grouped review and skips duplicate findings later", 
   }
 });
 
+test("post mode skips findings that cannot attach to the PR diff", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-unpostable-"));
+  try {
+    const remote = createBareRemote(root);
+    const client = new FakeReviewClient();
+    const config = makeConfig(root);
+    const result = await new PullRequestReviewWorkflow().run({
+      config,
+      client,
+      agent: new FakeAgent({
+        summary: "One issue",
+        findings: [
+          {
+            path: "README.md",
+            line: 99,
+            body: "This line is not in the PR diff.",
+            severity: "medium",
+          },
+        ],
+      }),
+      target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
+      post: true,
+      cloneUrlOverride: remote,
+    });
+
+    assert.equal(result.newFindings.length, 0);
+    assert.equal(result.skippedUnpostableFindings, 1);
+    assert.equal(client.postedReviews.length, 0);
+
+    const state = GitHubRepoStateStore.fromConfig(config, {
+      owner: "local-owner",
+      repo: "sample-repo",
+    });
+    assert.equal(state.getPostedReviewFindingKeys(1).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("post mode keeps valid diff findings while skipping invalid ones", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-partial-"));
+  try {
+    const remote = createBareRemote(root);
+    const client = new FakeReviewClient();
+    const result = await new PullRequestReviewWorkflow().run({
+      config: makeConfig(root),
+      client,
+      agent: new FakeAgent({
+        summary: "Two issues",
+        findings: [
+          { path: "README.md", line: 1, body: "Valid diff finding.", severity: "medium" },
+          { path: "README.md", line: 99, body: "Invalid diff finding.", severity: "medium" },
+        ],
+      }),
+      target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
+      post: true,
+      cloneUrlOverride: remote,
+    });
+
+    assert.equal(result.newFindings.length, 1);
+    assert.equal(result.skippedUnpostableFindings, 1);
+    assert.equal(client.postedReviews.length, 1);
+    assert.equal(client.postedReviews[0].comments.length, 1);
+    assert.equal(client.postedReviews[0].comments[0].line, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("dirty worktree review fails without posting", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-dirty-"));
   try {

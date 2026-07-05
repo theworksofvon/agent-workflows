@@ -36,6 +36,7 @@ export interface PullRequestReviewRunResult {
   review: ReviewResult;
   newFindings: ReviewFinding[];
   skippedDuplicateFindings: number;
+  skippedUnpostableFindings: number;
 }
 
 export class PullRequestReviewWorkflow {
@@ -99,13 +100,22 @@ export class PullRequestReviewWorkflow {
         (finding) => !postedKeys.has(findingFingerprint(finding)),
       );
       const skippedDuplicateFindings = review.findings.length - newFindings.length;
+      const postableFindings = post ? filterPostableFindings(newFindings, files) : newFindings;
+      const skippedUnpostableFindings = newFindings.length - postableFindings.length;
 
-      if (post && newFindings.length > 0) {
+      if (post && skippedUnpostableFindings > 0) {
+        log.warn("skipping unpostable review findings", {
+          slug,
+          skippedUnpostableFindings,
+        });
+      }
+
+      if (post && postableFindings.length > 0) {
         await client.createPullRequestReview({
           ref: target.repo,
           prNumber: target.prNumber,
           body: `${MARKER_TAG} ${review.summary}`,
-          comments: newFindings.map((finding) => ({
+          comments: postableFindings.map((finding) => ({
             path: finding.path,
             line: finding.line,
             body: formatFindingComment(finding),
@@ -113,25 +123,27 @@ export class PullRequestReviewWorkflow {
         });
         log.info("posted pr review", {
           slug,
-          findings: newFindings.length,
+          findings: postableFindings.length,
           skippedDuplicateFindings,
+          skippedUnpostableFindings,
         });
       } else if (post) {
         log.info("no new review findings to post", {
           slug,
           skippedDuplicateFindings,
+          skippedUnpostableFindings,
         });
       }
 
       if (post) {
         repoState.recordReviewRun({
           prNumber: target.prNumber,
-          postedFindingKeys: newFindings.map(findingFingerprint),
+          postedFindingKeys: postableFindings.map(findingFingerprint),
           entry: {
             reviewedAt: new Date().toISOString(),
             agent: agent.name,
             findingCount: review.findings.length,
-            postedFindingCount: newFindings.length,
+            postedFindingCount: postableFindings.length,
             dryRun: false,
             summary: review.summary,
           },
@@ -142,8 +154,9 @@ export class PullRequestReviewWorkflow {
         target,
         dryRun: !post,
         review,
-        newFindings,
+        newFindings: postableFindings,
         skippedDuplicateFindings,
+        skippedUnpostableFindings,
       };
     } finally {
       cleanupWorkdir(workdir, config.keepWorkdirs);
@@ -153,4 +166,40 @@ export class PullRequestReviewWorkflow {
 
 function formatFindingComment(finding: ReviewFinding): string {
   return `${MARKER_TAG}\n**${finding.severity}:** ${finding.body}`;
+}
+
+function filterPostableFindings(
+  findings: ReviewFinding[],
+  files: PullRequestReviewContext["files"],
+): ReviewFinding[] {
+  const postableLines = new Map<string, Set<number>>();
+  for (const file of files) {
+    postableLines.set(file.path, parseRightSidePatchLines(file.patch));
+  }
+  return findings.filter((finding) => postableLines.get(finding.path)?.has(finding.line) ?? false);
+}
+
+function parseRightSidePatchLines(patch: string | null): Set<number> {
+  const lines = new Set<number>();
+  if (!patch) return lines;
+
+  let rightLine: number | null = null;
+  for (const line of patch.split("\n")) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (header) {
+      rightLine = Number(header[1]);
+      continue;
+    }
+    if (rightLine === null) continue;
+    if (line.startsWith("+") || line.startsWith(" ")) {
+      lines.add(rightLine);
+      rightLine += 1;
+      continue;
+    }
+    if (line.startsWith("-")) continue;
+    if (line.startsWith("\\")) continue;
+    rightLine += 1;
+  }
+
+  return lines;
 }

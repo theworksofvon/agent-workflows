@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Validate Review Findings Before Posting
+
+Date: 2026-07-05 13:15:00 CDT; Status: In Progress; PR: Pending on `codex/pr-review-workflow`.
+Task: Prevent one invalid inline finding from failing an entire posted PR review.
+Message: Review mode now posts only findings whose path and right-side line exist in the PR diff.
+Added/Changed: Added diff-line validation, skip logging, CLI skip counts, and regression tests for invalid findings.
+Fixed/Removed: Avoids GitHub `Path could not be resolved` review submission failures.
+Handoff: Verified with `npm test`, `npm run typecheck`, and a live `--post` run on `EK-LABS-LLC/pluto-predicts#2`.
+
 ### Track Comment Cursors Per PR
 
 Date: 2026-07-05 10:03:30 CDT; Status: In Progress; PR: Pending on `codex/pr-review-workflow`.

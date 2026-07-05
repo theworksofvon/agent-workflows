@@ -78,6 +78,9 @@ function printReviewResult(result: PullRequestReviewRunResult): void {
   if (result.skippedDuplicateFindings > 0) {
     console.log(`Skipped duplicate findings: ${result.skippedDuplicateFindings}`);
   }
+  if (result.skippedUnpostableFindings > 0) {
+    console.log(`Skipped unpostable findings: ${result.skippedUnpostableFindings}`);
+  }
   if (result.newFindings.length === 0) {
     console.log("No new actionable findings.");
     return;
