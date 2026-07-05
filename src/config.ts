@@ -26,6 +26,10 @@ export interface Config {
   keepWorkdirs: boolean;
 }
 
+export interface LoadConfigOptions {
+  requireRepos?: boolean;
+}
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v || v.trim() === "") {
@@ -55,10 +59,12 @@ function parseRepos(raw: string): RepoSpec[] {
     });
 }
 
-export function loadConfig(): Config {
+export function loadConfig(options: LoadConfigOptions = {}): Config {
+  const requireRepos = options.requireRepos ?? true;
+  const rawRepos = process.env.REPOS?.trim() ?? "";
   const cfg: Config = {
     githubToken: required("GITHUB_TOKEN"),
-    repos: parseRepos(required("REPOS")),
+    repos: rawRepos === "" ? [] : parseRepos(rawRepos),
     pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
     commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "120")),
     prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
@@ -96,7 +102,7 @@ export function loadConfig(): Config {
   if (!Number.isInteger(cfg.agentMaxAttempts) || cfg.agentMaxAttempts < 1) {
     throw new Error("AGENT_MAX_ATTEMPTS must be an integer >= 1.");
   }
-  if (cfg.repos.length === 0) {
+  if (requireRepos && cfg.repos.length === 0) {
     throw new Error("REPOS must list at least one owner/repo.");
   }
 

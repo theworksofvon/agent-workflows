@@ -21,7 +21,10 @@ export interface PendingCommentGroup extends PRCommentPayload {
 }
 
 export interface GitHubPullRequestState {
+  cursors: GitHubRepoCursors;
   commentBatchHistory: PRCommentBatchHistory[];
+  reviewRunHistory: PRReviewRunHistory[];
+  postedReviewFindingKeys: string[];
 }
 
 export interface GitHubRepoState {
@@ -37,6 +40,16 @@ export interface PullRequestSnapshot {
   body: string | null;
   headRef: string;
   baseRef: string;
+  draft?: boolean;
+}
+
+export interface PRReviewRunHistory {
+  reviewedAt: string;
+  agent: string;
+  findingCount: number;
+  postedFindingCount: number;
+  dryRun: boolean;
+  summary: string;
 }
 
 const defaultState = (): GitHubRepoState => ({
@@ -83,21 +96,21 @@ export class GitHubRepoStateStore {
     });
   }
 
-  get issueCommentCursor(): number {
-    return this.state.cursors.issueCommentId;
+  getIssueCommentCursor(prNumber: number): number {
+    return this.getPrState(prNumber).cursors.issueCommentId;
   }
 
-  setIssueCommentCursor(id: number): void {
-    this.state.cursors.issueCommentId = id;
+  setIssueCommentCursor(prNumber: number, id: number): void {
+    this.getPrState(prNumber).cursors.issueCommentId = id;
     this.persist();
   }
 
-  get reviewCommentCursor(): number {
-    return this.state.cursors.reviewCommentId;
+  getReviewCommentCursor(prNumber: number): number {
+    return this.getPrState(prNumber).cursors.reviewCommentId;
   }
 
-  setReviewCommentCursor(id: number): void {
-    this.state.cursors.reviewCommentId = id;
+  setReviewCommentCursor(prNumber: number, id: number): void {
+    this.getPrState(prNumber).cursors.reviewCommentId = id;
     this.persist();
   }
 
@@ -197,13 +210,49 @@ export class GitHubRepoStateStore {
 
   recordPrHistory(prNumber: number, entry: PRCommentBatchHistory): void {
     const key = String(prNumber);
-    const prState = this.state.prs[key] ?? { commentBatchHistory: [] };
+    const prState = this.state.prs[key] ?? defaultPullRequestState();
     prState.commentBatchHistory = takeLatest(
       [...prState.commentBatchHistory, entry],
       this.limits.commentBatchHistoryLimit,
     );
     this.state.prs[key] = prState;
     this.persist();
+  }
+
+  getPostedReviewFindingKeys(prNumber: number): string[] {
+    return this.state.prs[String(prNumber)]?.postedReviewFindingKeys ?? [];
+  }
+
+  recordReviewRun(args: {
+    prNumber: number;
+    entry: PRReviewRunHistory;
+    postedFindingKeys: string[];
+  }): void {
+    const key = String(args.prNumber);
+    const prState = this.state.prs[key] ?? defaultPullRequestState();
+    prState.reviewRunHistory = takeLatest(
+      [...prState.reviewRunHistory, args.entry],
+      this.limits.commentBatchHistoryLimit,
+    );
+    if (args.postedFindingKeys.length > 0) {
+      const seen = new Set(prState.postedReviewFindingKeys);
+      for (const findingKey of args.postedFindingKeys) {
+        seen.add(findingKey);
+      }
+      prState.postedReviewFindingKeys = takeLatest(
+        [...seen],
+        this.limits.processedCommentKeyLimit,
+      );
+    }
+    this.state.prs[key] = prState;
+    this.persist();
+  }
+
+  private getPrState(prNumber: number): GitHubPullRequestState {
+    const key = String(prNumber);
+    const prState = this.state.prs[key] ?? defaultPullRequestState();
+    this.state.prs[key] = prState;
+    return prState;
   }
 
   private markCommentsProcessed(keys: string[]): void {
@@ -243,8 +292,33 @@ function takeLatest<T>(items: T[], limit: number): T[] {
   return limit <= 0 ? [] : items.slice(-limit);
 }
 
+function defaultPullRequestState(): GitHubPullRequestState {
+  return {
+    cursors: {
+      issueCommentId: 0,
+      reviewCommentId: 0,
+    },
+    commentBatchHistory: [],
+    reviewRunHistory: [],
+    postedReviewFindingKeys: [],
+  };
+}
+
 function normalizeState(raw: unknown): GitHubRepoState {
   const state = raw as Partial<GitHubRepoState>;
+  const prs: Record<string, GitHubPullRequestState> = {};
+  for (const [prNumber, prState] of Object.entries(state.prs ?? {})) {
+    const inferredCursors = inferCursorsFromHistory(prState.commentBatchHistory ?? []);
+    prs[prNumber] = {
+      cursors: {
+        issueCommentId: prState.cursors?.issueCommentId ?? inferredCursors.issueCommentId,
+        reviewCommentId: prState.cursors?.reviewCommentId ?? inferredCursors.reviewCommentId,
+      },
+      commentBatchHistory: prState.commentBatchHistory ?? [],
+      reviewRunHistory: prState.reviewRunHistory ?? [],
+      postedReviewFindingKeys: prState.postedReviewFindingKeys ?? [],
+    };
+  }
   return {
     cursors: {
       issueCommentId: state.cursors?.issueCommentId ?? 0,
@@ -252,6 +326,23 @@ function normalizeState(raw: unknown): GitHubRepoState {
     },
     pendingCommentGroups: state.pendingCommentGroups ?? {},
     processedCommentKeys: state.processedCommentKeys ?? [],
-    prs: state.prs ?? {},
+    prs,
   };
+}
+
+function inferCursorsFromHistory(history: PRCommentBatchHistory[]): GitHubRepoCursors {
+  const cursors = { issueCommentId: 0, reviewCommentId: 0 };
+  for (const entry of history) {
+    for (const key of entry.commentKeys) {
+      const match = /:(issue|review):([0-9]+)$/.exec(key);
+      if (!match) continue;
+      const id = Number(match[2]);
+      if (match[1] === "issue") {
+        cursors.issueCommentId = Math.max(cursors.issueCommentId, id);
+      } else {
+        cursors.reviewCommentId = Math.max(cursors.reviewCommentId, id);
+      }
+    }
+  }
+  return cursors;
 }

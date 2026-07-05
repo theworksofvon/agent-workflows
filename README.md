@@ -28,6 +28,17 @@ npm run dev
 
 The daemon polls every 60s (configurable). On new comments it will log its progress and act.
 
+Manual review-only mode is available when you want the configured agent to review a PR without making changes:
+
+```bash
+npm run review -- owner/repo#123
+npm run review -- https://github.com/owner/repo/pull/123 --post
+```
+
+Review mode runs in an isolated worktree, asks for actionable PR findings only, and never commits or pushes. It dry-runs by default; pass `--post` to submit one grouped GitHub review.
+
+See [docs/pr-review-mode.md](docs/pr-review-mode.md) for the short usage guide.
+
 ## Testing
 
 ```bash
@@ -60,11 +71,13 @@ All via environment (`.env`):
 | `CODEX_BIN` | no | `codex` | path to the codex binary |
 | `KEEP_WORKDIRS` | no | `false` | keep per-task workdirs for debugging |
 
+`REPOS` is required for daemon polling. Manual review mode can target any PR your `GITHUB_TOKEN` can read/write, even when that repo is not listed in `REPOS`.
+
 ## Comment batching and loop prevention
 
 New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
 
-GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains only that repo's cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
+GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains per-PR cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
 
 Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
 
