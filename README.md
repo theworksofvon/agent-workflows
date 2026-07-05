@@ -77,7 +77,7 @@ All via environment (`.env`):
 
 New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
 
-GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains only that repo's cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
+GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains per-PR cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
 
 Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
 

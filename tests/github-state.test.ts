@@ -90,3 +90,24 @@ test("retryable failures pause and later re-emit the batch", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("comment cursors are tracked per pull request", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-cursors-"));
+  try {
+    const state = makeState(root);
+
+    state.setIssueCommentCursor(1, 100);
+    state.setReviewCommentCursor(1, 200);
+    state.setIssueCommentCursor(2, 10);
+    state.setReviewCommentCursor(2, 20);
+
+    assert.equal(state.getIssueCommentCursor(1), 100);
+    assert.equal(state.getReviewCommentCursor(1), 200);
+    assert.equal(state.getIssueCommentCursor(2), 10);
+    assert.equal(state.getReviewCommentCursor(2), 20);
+    assert.equal(state.getIssueCommentCursor(3), 0);
+    assert.equal(state.getReviewCommentCursor(3), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

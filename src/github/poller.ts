@@ -48,7 +48,7 @@ export interface PRCommentPayload {
 
 /**
  * Polls configured repos for new PR comments (both conversation and inline
- * review comments). Owns per-repo cursors in repo-scoped state. Filters out the
+ * review comments). Owns per-PR cursors in repo-scoped state. Filters out the
  * daemon's own comments to prevent feedback loops.
  */
 export function githubPoller(args: {
@@ -88,7 +88,7 @@ export function githubPoller(args: {
       }
 
       // --- conversation comments ---
-      const lastIssue = state.issueCommentCursor;
+      const lastIssue = state.getIssueCommentCursor(pr.number);
       const issueComments = await client.listIssueComments(repo, pr.number);
       for (const c of issueComments) {
         if (c.id <= lastIssue) continue;
@@ -111,10 +111,10 @@ export function githubPoller(args: {
         });
       }
       const maxIssue = issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue);
-      state.setIssueCommentCursor(maxIssue);
+      state.setIssueCommentCursor(pr.number, maxIssue);
 
       // --- inline review comments ---
-      const lastReview = state.reviewCommentCursor;
+      const lastReview = state.getReviewCommentCursor(pr.number);
       const reviewComments = await client.listReviewComments(repo, pr.number);
       for (const c of reviewComments) {
         if (c.id <= lastReview) continue;
@@ -140,7 +140,7 @@ export function githubPoller(args: {
         });
       }
       const maxReview = reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview);
-      state.setReviewCommentCursor(maxReview);
+      state.setReviewCommentCursor(pr.number, maxReview);
     }
 
     const windowMs = config.commentBatchWindowSec * 1000;

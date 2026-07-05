@@ -80,3 +80,72 @@ test("github poller skips draft PRs before reading comments", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("github poller processes old draft comments after PR becomes ready", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-poller-ready-"));
+  try {
+    let draft = true;
+    const client = {
+      async listOpenPRs() {
+        return [
+          {
+            number: 1,
+            title: "Was Draft",
+            body: null,
+            headRef: "draft-branch",
+            baseRef: "main",
+            draft,
+          },
+          {
+            number: 2,
+            title: "Ready",
+            body: null,
+            headRef: "ready-branch",
+            baseRef: "main",
+            draft: false,
+          },
+        ];
+      },
+      async listIssueComments(_repo: unknown, prNumber: number) {
+        if (prNumber === 1) {
+          return [
+            {
+              id: 100,
+              author: "reviewer",
+              body: "old draft comment",
+              createdAt: new Date(1_000).toISOString(),
+            },
+          ];
+        }
+        return [
+          {
+            id: 105,
+            author: "reviewer",
+            body: "new ready comment",
+            createdAt: new Date(2_000).toISOString(),
+          },
+        ];
+      },
+      async listReviewComments() {
+        return [];
+      },
+    } as unknown as GitHubClient;
+
+    const poller = githubPoller({ config: makeConfig(root), client });
+    const firstPoll = await poller.poll();
+    assert.deepEqual(
+      firstPoll.map((event) => event.payload.prNumber),
+      [2],
+    );
+
+    draft = false;
+    const secondPoll = await poller.poll();
+    assert.deepEqual(
+      secondPoll.map((event) => event.payload.prNumber),
+      [1],
+    );
+    assert.equal(secondPoll[0].payload.comments[0].id, 100);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
