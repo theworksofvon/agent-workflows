@@ -32,9 +32,11 @@ npm run review -- https://github.com/owner/repo/pull/123
 ## Guardrails
 
 - Never commits or pushes.
+- Refuses to run on draft PRs.
 - Refuses to post if the agent edits files.
 - Refuses to post if the agent exits nonzero.
 - Refuses to post if the agent output is not valid review JSON.
 - Skips duplicate findings already posted for the same PR.
+- Skips findings whose path or line cannot be attached to the PR diff.
 
 `REPOS` is only required for daemon polling. Review mode can target any PR your `GITHUB_TOKEN` can access.

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Document Current Runtime Behavior
+
+Date: 2026-07-05 18:07:00 CDT; Status: In Progress; PR: Pending on `codex/docs-current-behavior`.
+Task: Bring README docs in line with merged review, draft, cursor, and CI behavior.
+Message: Docs now call out baseline GitHub Actions checks, draft PR skipping, per-PR cursor behavior, and review posting guardrails.
+Added/Changed: Updated README testing/comment-batching sections and PR review mode guardrails.
+Fixed/Removed: Reduces handoff ambiguity for review-only mode and daemon polling behavior.
+Handoff: Docs-only; no code behavior changed.
+
 ### Add GitHub Actions CI
 
 Date: 2026-07-05 13:36:00 CDT; Status: In Progress; PR: Pending on `codex/ci-checks`.
