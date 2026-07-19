@@ -42,7 +42,9 @@ interface PullRequestRequest extends RepoRequest {
   pull_number: number;
 }
 
-type ListFilesMethod = (args: PullRequestRequest & { per_page: number }) => Promise<{
+type ListFilesMethod = (
+  args: PullRequestRequest & { per_page: number },
+) => Promise<{
   data: PullRequestFileApiRecord[];
 }>;
 
@@ -50,22 +52,40 @@ type ListFilesMethod = (args: PullRequestRequest & { per_page: number }) => Prom
 export interface GitHubApi {
   rest: {
     pulls: {
-      list(args: RepoRequest & { state: "open"; per_page: number }): Promise<{ data: PullRequestApiRecord[] }>;
-      listReviewComments(args: PullRequestRequest & { per_page: number }): Promise<{ data: ReviewCommentApiRecord[] }>;
+      list(
+        args: RepoRequest & { state: "open"; per_page: number },
+      ): Promise<{ data: PullRequestApiRecord[] }>;
+      listReviewComments(
+        args: PullRequestRequest & { per_page: number },
+      ): Promise<{ data: ReviewCommentApiRecord[] }>;
       get(args: PullRequestRequest): Promise<{ data: PullRequestApiRecord }>;
       listFiles: ListFilesMethod;
-      createReview(args: PullRequestRequest & {
-        event: "COMMENT";
-        body: string;
-        comments: Array<{ path: string; line: number; side: "RIGHT"; body: string }>;
-      }): Promise<unknown>;
+      createReview(
+        args: PullRequestRequest & {
+          event: "COMMENT";
+          body: string;
+          comments: Array<{
+            path: string;
+            line: number;
+            side: "RIGHT";
+            body: string;
+          }>;
+        },
+      ): Promise<unknown>;
     };
     issues: {
-      listComments(args: RepoRequest & { issue_number: number; per_page: number }): Promise<{ data: IssueCommentApiRecord[] }>;
-      createComment(args: RepoRequest & { issue_number: number; body: string }): Promise<unknown>;
+      listComments(
+        args: RepoRequest & { issue_number: number; per_page: number },
+      ): Promise<{ data: IssueCommentApiRecord[] }>;
+      createComment(
+        args: RepoRequest & { issue_number: number; body: string },
+      ): Promise<unknown>;
     };
   };
-  paginate(method: ListFilesMethod, args: PullRequestRequest & { per_page: number }): Promise<PullRequestFileApiRecord[]>;
+  paginate(
+    method: ListFilesMethod,
+    args: PullRequestRequest & { per_page: number },
+  ): Promise<PullRequestFileApiRecord[]>;
 }
 
 /**
@@ -106,14 +126,16 @@ export interface PullRequestReviewComment {
 export class GitHubClient {
   readonly octokit: GitHubApi;
 
-  constructor(token: string, options: { octokit?: GitHubApi } = {}) {
-    this.octokit = options.octokit ?? new Octokit({ auth: token });
+  constructor(
+    token: string,
+    options: { octokit?: GitHubApi; baseUrl?: string } = {},
+  ) {
+    this.octokit =
+      options.octokit ?? new Octokit({ auth: token, baseUrl: options.baseUrl });
   }
 
   /** List open PRs for a repo. */
-  async listOpenPRs(ref: RepoRef): Promise<
-    PullRequestDetails[]
-  > {
+  async listOpenPRs(ref: RepoRef): Promise<PullRequestDetails[]> {
     const res = await this.octokit.rest.pulls.list({
       owner: ref.owner,
       repo: ref.repo,
@@ -135,7 +157,9 @@ export class GitHubClient {
     ref: RepoRef,
     prNumber: number,
     since?: number,
-  ): Promise<Array<{ id: number; author: string; body: string; createdAt: string }>> {
+  ): Promise<
+    Array<{ id: number; author: string; body: string; createdAt: string }>
+  > {
     const res = await this.octokit.rest.issues.listComments({
       owner: ref.owner,
       repo: ref.repo,
@@ -206,7 +230,10 @@ export class GitHubClient {
     });
   }
 
-  async getPullRequest(ref: RepoRef, prNumber: number): Promise<PullRequestDetails> {
+  async getPullRequest(
+    ref: RepoRef,
+    prNumber: number,
+  ): Promise<PullRequestDetails> {
     const res = await this.octokit.rest.pulls.get({
       owner: ref.owner,
       repo: ref.repo,
@@ -222,13 +249,19 @@ export class GitHubClient {
     };
   }
 
-  async listPullRequestFiles(ref: RepoRef, prNumber: number): Promise<PullRequestFile[]> {
-    const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
-      owner: ref.owner,
-      repo: ref.repo,
-      pull_number: prNumber,
-      per_page: 100,
-    });
+  async listPullRequestFiles(
+    ref: RepoRef,
+    prNumber: number,
+  ): Promise<PullRequestFile[]> {
+    const files = await this.octokit.paginate(
+      this.octokit.rest.pulls.listFiles,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: prNumber,
+        per_page: 100,
+      },
+    );
     return files.map((file) => ({
       path: file.filename,
       status: file.status,

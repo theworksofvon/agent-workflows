@@ -5,13 +5,13 @@ reviews, and share portable agent skills across Codex, Claude Code, and Cursor.
 
 ## What it offers
 
-| Capability | What happens |
-| --- | --- |
-| PR comment automation | Polls watched repositories, batches related feedback, runs an agent in an isolated worktree, and safely pushes resulting commits back to the PR branch. |
-| Manual PR review | Runs a read-only review against any accessible PR. It prints findings by default and can post one grouped GitHub review with `--post`. |
-| Adversarial review | Optionally sends the primary result through an independent verification pass for large, sensitive, or high-severity changes. |
-| Shared agent skills | Keeps repository-owned `SKILL.md` packages identical across Codex, Claude Code, and Cursor through personal-directory links. |
-| Model orchestration | Provides a portable planning → implementation → test → review → repair workflow with stage artifacts, usage records, and resumable checkpoints. Provider commands still need project-specific configuration. |
+| Capability            | What happens                                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PR comment automation | Polls watched repositories, batches related feedback, runs an agent in an isolated worktree, and safely pushes resulting commits back to the PR branch.                                                      |
+| Manual PR review      | Runs a read-only review against any accessible PR. It prints findings by default and can post one grouped GitHub review with `--post`.                                                                       |
+| Adversarial review    | Optionally sends the primary result through an independent verification pass for large, sensitive, or high-severity changes.                                                                                 |
+| Shared agent skills   | Keeps repository-owned `SKILL.md` packages identical across Codex, Claude Code, and Cursor through personal-directory links.                                                                                 |
+| Model orchestration   | Provides a portable planning → implementation → test → review → repair workflow with stage artifacts, usage records, and resumable checkpoints. Provider commands still need project-specific configuration. |
 
 ```text
 PR feedback → poll and batch → isolated worktree → coding agent → guarded push
@@ -83,21 +83,24 @@ service manager if it must survive terminal exits or machine restarts.
 
 ## Common commands
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm run setup` | Install dependencies, create `.env`, and install shared skills. |
-| `pnpm run doctor` | Validate a machine before starting the daemon. |
-| `pnpm build` | Compile TypeScript and source maps into `dist/`. |
-| `pnpm start` | Run the compiled daemon with Node. |
-| `pnpm dev` | Run with source watching. |
-| `pnpm review owner/repo#123` | Review a PR locally without posting or changing files. |
-| `pnpm review owner/repo#123 --post` | Post new actionable findings as one grouped review. |
-| `pnpm skills:install` | Refresh Codex, Claude, and Cursor links after adding a skill. |
-| `pnpm test` | Run Node tests with exact 100% line, branch, and function coverage for `src/**/*.ts`. |
-| `pnpm test:smoke` | Exercise compiled CLI help routes without credentials or network access. |
-| `pnpm test:python` | Run the Python model-orchestrator test suite. |
-| `pnpm test:typecheck` | Strictly typecheck the TypeScript test suite. |
-| `pnpm typecheck && pnpm test:typecheck && pnpm build && pnpm check:scripts && pnpm test && pnpm test:smoke && pnpm test:python` | Run the authoritative no-token verification suite. |
+| Command                             | Purpose                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------- |
+| `pnpm run setup`                    | Install dependencies, create `.env`, and install shared skills.                    |
+| `pnpm run doctor`                   | Validate a machine before starting the daemon.                                     |
+| `pnpm build`                        | Compile TypeScript and source maps into `dist/`.                                   |
+| `pnpm start`                        | Run the compiled daemon with Node.                                                 |
+| `pnpm dev`                          | Run with source watching.                                                          |
+| `pnpm review owner/repo#123`        | Review a PR locally without posting or changing files.                             |
+| `pnpm review owner/repo#123 --post` | Post new actionable findings as one grouped review.                                |
+| `pnpm skills:install`               | Refresh Codex, Claude, and Cursor links after adding a skill.                      |
+| `pnpm test:unit`                    | Run fast unit tests.                                                               |
+| `pnpm test:integration`             | Run local integration tests, including clean setup and temporary Git repositories. |
+| `pnpm test:e2e`                     | Run the deterministic HTTP, Git, daemon, and fake-agent end-to-end scenario.       |
+| `pnpm test`                         | Run all 60 Node tests with exact 100% coverage for production TypeScript.          |
+| `pnpm test:smoke`                   | Exercise compiled CLI help routes without credentials or network access.           |
+| `pnpm test:python`                  | Run the Python model-orchestrator test suite.                                      |
+| `pnpm lint`                         | Run ESLint across TypeScript and Node scripts.                                     |
+| `pnpm format:check`                 | Verify repository formatting with Prettier.                                        |
 
 Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 `--no-adversarial` to override the configured review policy. See
@@ -169,21 +172,21 @@ identifiers in that project's `.orchestrator/config.toml`.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | required | GitHub API, clone, review, comment, and push authentication. |
-| `REPOS` | required for daemon | Comma-separated `owner/repo` list. |
-| `AGENT` | `codex` | `codex`, `claude-code`, or `zcode`. |
-| `AGENT_SELF_USER` | unset | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
-| `POLL_INTERVAL_SEC` | `60` | Poll interval; minimum 5 seconds. |
-| `COMMENT_BATCH_WINDOW_SEC` | `10` | Quiet debounce after the latest related comment. |
-| `COMMENT_BATCH_MIN_COMMENTS` | `2` | Related-comment count that makes a batch eligible. |
-| `COMMENT_BATCH_MAX_WAIT_SEC` | `300` | Maximum age before a smaller batch becomes eligible; `0` disables it. |
-| `REVIEW_ADVERSARIAL_MODE` | `auto` | `off`, `auto`, or `always`. |
-| `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT` | Adapter for the verification pass. |
-| `PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN` | `false` | Replay comments visible on the first poll. |
-| `STATE_DIR` | `./state` | Polling state, cached repos, and worktrees. |
-| `KEEP_WORKDIRS` | `false` | Retain worktrees for debugging. |
+| Variable                                 | Default             | Purpose                                                                         |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`                           | required            | GitHub API, clone, review, comment, and push authentication.                    |
+| `REPOS`                                  | required for daemon | Comma-separated `owner/repo` list.                                              |
+| `AGENT`                                  | `codex`             | `codex`, `claude-code`, or `zcode`.                                             |
+| `AGENT_SELF_USER`                        | unset               | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
+| `POLL_INTERVAL_SEC`                      | `60`                | Poll interval; minimum 5 seconds.                                               |
+| `COMMENT_BATCH_WINDOW_SEC`               | `10`                | Quiet debounce after the latest related comment.                                |
+| `COMMENT_BATCH_MIN_COMMENTS`             | `2`                 | Related-comment count that makes a batch eligible.                              |
+| `COMMENT_BATCH_MAX_WAIT_SEC`             | `300`               | Maximum age before a smaller batch becomes eligible; `0` disables it.           |
+| `REVIEW_ADVERSARIAL_MODE`                | `auto`              | `off`, `auto`, or `always`.                                                     |
+| `REVIEW_ADVERSARIAL_AGENT`               | same as `AGENT`     | Adapter for the verification pass.                                              |
+| `PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN` | `false`             | Replay comments visible on the first poll.                                      |
+| `STATE_DIR`                              | `./state`           | Polling state, cached repos, and worktrees.                                     |
+| `KEEP_WORKDIRS`                          | `false`             | Retain worktrees for debugging.                                                 |
 
 Retention, retry, and binary override settings are documented in
 [.env.example](.env.example).
@@ -211,21 +214,33 @@ Retention, retry, and binary override settings are documented in
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test:typecheck
+pnpm lint
+pnpm format:check
 pnpm build
 pnpm check:scripts
+pnpm test:unit
+pnpm test:integration
+pnpm test:e2e
 pnpm test
 pnpm test:smoke
 pnpm test:python
 pnpm run doctor
 ```
 
-These are the authoritative local verification commands. `pnpm test` positively
-includes every production TypeScript file under `src/` and fails below 100% for
-lines, branches, or functions. The smoke suite runs only compiled help paths, so
-it needs no token, repository configuration, or agent binary. GitHub Actions
-runs the deterministic production and test typechecks, build, script, Node, smoke, and Python checks
-on pull requests and pushes to `main` using Node 24 and Python 3.11. `doctor`
-remains the machine-specific check for local credentials, binaries, and links.
+These are the authoritative local verification commands. `pnpm test` includes
+every production TypeScript file under `src/` and fails below 100% for lines,
+branches, or functions. All normal test tiers use local servers, temporary Git
+repositories, and fake agent binaries, so they spend no model tokens and need no
+GitHub credentials.
+
+Pull requests run seven parallel jobs covering quality and type safety, unit
+tests, integration tests, deterministic end-to-end behavior, complete coverage,
+the compiled runtime, and the Python orchestrator. Pushes to `main`, manual
+runs, and the weekly schedule add Linux, macOS, and Windows validation plus a
+production dependency audit. Keep the pull-request jobs as required branch
+protection checks; the `main` workflow is a broader post-merge safety net.
+`doctor` remains the machine-specific check for local credentials, binaries,
+and skill links.
 
 The extension seams are intentionally small:
 

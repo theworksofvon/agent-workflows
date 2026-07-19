@@ -46,17 +46,24 @@ export interface PullRequestReviewRunResult {
 }
 
 export class PullRequestReviewWorkflow {
-  async run(options: RunPullRequestReviewOptions): Promise<PullRequestReviewRunResult> {
+  async run(
+    options: RunPullRequestReviewOptions,
+  ): Promise<PullRequestReviewRunResult> {
     const { config, client, agent, target, post } = options;
     const slug = `${target.repo.owner}/${target.repo.repo}#${target.prNumber}`;
     log.info("starting pr review", { slug, agent: agent.name, post });
 
     const pr = await client.getPullRequest(target.repo, target.prNumber);
     if (pr.draft) {
-      throw new Error(`PR ${slug} is a draft; review mode only runs on ready-for-review PRs.`);
+      throw new Error(
+        `PR ${slug} is a draft; review mode only runs on ready-for-review PRs.`,
+      );
     }
 
-    const files = await client.listPullRequestFiles(target.repo, target.prNumber);
+    const files = await client.listPullRequestFiles(
+      target.repo,
+      target.prNumber,
+    );
     const reviewContext: PullRequestReviewContext = {
       repo: target.repo,
       prNumber: target.prNumber,
@@ -89,12 +96,16 @@ export class PullRequestReviewWorkflow {
         reviewContext,
         primaryReview,
       );
-      const adversarialRan = adversarialDecision.run && options.adversarialAgent !== undefined;
+      const adversarialRan =
+        adversarialDecision.run && options.adversarialAgent !== undefined;
       if (adversarialDecision.run && !options.adversarialAgent) {
-        log.warn("adversarial review requested but no adversarial agent was provided", {
-          slug,
-          reasons: adversarialDecision.reasons,
-        });
+        log.warn(
+          "adversarial review requested but no adversarial agent was provided",
+          {
+            slug,
+            reasons: adversarialDecision.reasons,
+          },
+        );
       }
       const review = adversarialRan
         ? await runReviewAgent({
@@ -110,13 +121,19 @@ export class PullRequestReviewWorkflow {
           })
         : primaryReview;
       const repoState = GitHubRepoStateStore.fromConfig(config, target.repo);
-      const postedKeys = new Set(repoState.getPostedReviewFindingKeys(target.prNumber));
+      const postedKeys = new Set(
+        repoState.getPostedReviewFindingKeys(target.prNumber),
+      );
       const newFindings = review.findings.filter(
         (finding) => !postedKeys.has(findingFingerprint(finding)),
       );
-      const skippedDuplicateFindings = review.findings.length - newFindings.length;
-      const postableFindings = post ? filterPostableFindings(newFindings, files) : newFindings;
-      const skippedUnpostableFindings = newFindings.length - postableFindings.length;
+      const skippedDuplicateFindings =
+        review.findings.length - newFindings.length;
+      const postableFindings = post
+        ? filterPostableFindings(newFindings, files)
+        : newFindings;
+      const skippedUnpostableFindings =
+        newFindings.length - postableFindings.length;
 
       if (post && skippedUnpostableFindings > 0) {
         log.warn("skipping unpostable review findings", {
@@ -201,13 +218,16 @@ async function runReviewAgent(args: {
     );
   }
   if (hasUncommittedChanges(args.workdir)) {
-    throw new Error(`${args.label} agent modified files during review-only mode; refusing to post.`);
+    throw new Error(
+      `${args.label} agent modified files during review-only mode; refusing to post.`,
+    );
   }
   try {
     return parseReviewResult(result.stdout);
   } catch (err) {
     throw new Error(
       `Failed to parse ${args.label.toLowerCase()} agent output: ${String(err)}. stderr tail: ${result.stderr.slice(-1000)} stdout tail: ${result.stdout.slice(-1000)}`,
+      { cause: err },
     );
   }
 }
@@ -224,7 +244,9 @@ function filterPostableFindings(
   for (const file of files) {
     postableLines.set(file.path, parseRightSidePatchLines(file.patch));
   }
-  return findings.filter((finding) => postableLines.get(finding.path)?.has(finding.line) ?? false);
+  return findings.filter(
+    (finding) => postableLines.get(finding.path)?.has(finding.line) ?? false,
+  );
 }
 
 export function parseRightSidePatchLines(patch: string | null): Set<number> {

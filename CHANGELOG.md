@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Expand CI Validation Tiers
+
+Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Make pull-request validation comprehensive while keeping broader platform and dependency checks separate after merge.
+Message: Pull requests now run parallel quality, unit, integration, deterministic end-to-end, coverage, compiled-runtime, and Python checks; `main` adds Linux, macOS, and Windows validation plus scheduled production dependency audits.
+Added/Changed: Added ESLint and Prettier gates, Actionlint and ShellCheck validation, a clean-install setup test, a local HTTP/Git end-to-end workflow test, cross-platform Python discovery, seven focused PR jobs, and a three-platform main-branch matrix. The Node suite now contains 60 deterministic no-token tests and continues to require exact 100% line, branch, and function coverage for production TypeScript.
+Fixed/Removed: Preserved wrapped error causes, made GitHub API endpoints injectable for boundary testing, and removed the assumption that `python3` is the Python executable on every supported platform.
+Handoff: Verified locally with production and test typechecks, build, lint, formatting, script checks, all Node test tiers, compiled smoke tests, five Python tests, production dependency audit, ShellCheck, Actionlint, and diff validation; GitHub-hosted platform checks remain to run after the branch is pushed.
+
 ### Adopt pnpm As Package Manager
 
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
