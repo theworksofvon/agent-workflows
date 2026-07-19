@@ -11,7 +11,11 @@ const LEVELS: Record<Level, number> = {
   error: 40,
 };
 
-function fmt(level: Level, msg: string, meta?: Record<string, unknown>): string {
+function fmt(
+  level: Level,
+  msg: string,
+  meta?: Record<string, unknown>,
+): string {
   const ts = new Date().toISOString();
   const base = `${ts} [${level.toUpperCase()}] ${msg}`;
   if (!meta || Object.keys(meta).length === 0) return base;
@@ -21,7 +25,8 @@ function fmt(level: Level, msg: string, meta?: Record<string, unknown>): string 
 export function createLogger(minLevel: Level = "info") {
   return {
     debug(msg: string, meta?: Record<string, unknown>) {
-      if (LEVELS[minLevel] <= LEVELS.debug) console.debug(fmt("debug", msg, meta));
+      if (LEVELS[minLevel] <= LEVELS.debug)
+        console.debug(fmt("debug", msg, meta));
     },
     info(msg: string, meta?: Record<string, unknown>) {
       if (LEVELS[minLevel] <= LEVELS.info) console.log(fmt("info", msg, meta));
@@ -30,7 +35,8 @@ export function createLogger(minLevel: Level = "info") {
       if (LEVELS[minLevel] <= LEVELS.warn) console.warn(fmt("warn", msg, meta));
     },
     error(msg: string, meta?: Record<string, unknown>) {
-      if (LEVELS[minLevel] <= LEVELS.error) console.error(fmt("error", msg, meta));
+      if (LEVELS[minLevel] <= LEVELS.error)
+        console.error(fmt("error", msg, meta));
     },
   };
 }

@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { claudeCodeAdapter } from "../src/agents/claude-code.js";
@@ -101,7 +108,10 @@ test("zcode adapter invokes zcode print mode with prompt on stdin", async () => 
       workdir: root,
     });
 
-    assert.deepEqual(capture.argv, ["--print", "--dangerously-skip-permissions"]);
+    assert.deepEqual(capture.argv, [
+      "--print",
+      "--dangerously-skip-permissions",
+    ]);
     assert.equal(capture.cwd, realpathSync(root));
     assert.equal(capture.stdin, "review prompt");
   } finally {
@@ -131,11 +141,16 @@ test("all adapters report spawn errors and signal exits without invoking a real 
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-agent-errors-"));
   try {
     const signalBinary = join(root, "signal-agent.js");
-    writeFileSync(signalBinary, "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n");
+    writeFileSync(
+      signalBinary,
+      "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n",
+    );
     chmodSync(signalBinary, 0o755);
     const factories = [codexAdapter, zcodeAdapter, claudeCodeAdapter];
     for (const factory of factories) {
-      const missing = await factory({ binary: join(root, "does-not-exist") }).run({
+      const missing = await factory({
+        binary: join(root, "does-not-exist"),
+      }).run({
         workdir: root,
         branch: "feature",
         prompt: "prompt",

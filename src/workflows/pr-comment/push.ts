@@ -8,7 +8,10 @@ function git(args: string[], cwd: string): string {
 /** Count commits on the branch ahead of origin. */
 export function commitsAhead(workdir: string, branch: string): number {
   try {
-    const out = git(["rev-list", "--count", "HEAD", `^origin/${branch}`], workdir);
+    const out = git(
+      ["rev-list", "--count", "HEAD", `^origin/${branch}`],
+      workdir,
+    );
     return Number(out) || 0;
   } catch {
     // origin/HEAD may not exist; fall back to status.
@@ -21,7 +24,10 @@ export function hasUncommittedChanges(workdir: string): boolean {
   return git(["status", "--porcelain"], workdir) !== "";
 }
 
-export function commitUncommittedChanges(workdir: string, message: string): boolean {
+export function commitUncommittedChanges(
+  workdir: string,
+  message: string,
+): boolean {
   if (!hasUncommittedChanges(workdir)) return false;
   log.info("committing uncommitted agent changes", { message });
   git(["add", "-A"], workdir);
@@ -33,7 +39,11 @@ export function commitUncommittedChanges(workdir: string, message: string): bool
  * Push the branch back to origin. Uses force-with-lease to be safe against
  * a teammate pushing in between our fetch and push.
  */
-export function pushBranch(workdir: string, branch: string, expectedRemoteSha: string): void {
+export function pushBranch(
+  workdir: string,
+  branch: string,
+  expectedRemoteSha: string,
+): void {
   const remoteRef = `refs/heads/${branch}`;
   log.info("pushing branch to origin", { branch, expectedRemoteSha });
   git(

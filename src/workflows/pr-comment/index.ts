@@ -20,16 +20,17 @@ export interface PRCommentWorkflowDependencies {
   now: typeof Date.now;
 }
 
-export const defaultPRCommentWorkflowDependencies: PRCommentWorkflowDependencies = {
-  prepareWorkdir,
-  cleanupWorkdir,
-  runAgent,
-  buildPrompt,
-  commitUncommittedChanges,
-  commitsAhead,
-  pushBranch,
-  now: Date.now,
-};
+export const defaultPRCommentWorkflowDependencies: PRCommentWorkflowDependencies =
+  {
+    prepareWorkdir,
+    cleanupWorkdir,
+    runAgent,
+    buildPrompt,
+    commitUncommittedChanges,
+    commitsAhead,
+    pushBranch,
+    now: Date.now,
+  };
 
 /**
  * Workflow #1: PR comment → coding agent → push.
@@ -79,13 +80,16 @@ export function prCommentWorkflow(
           log.warn("agent exited non-zero", {
             slug,
             exitCode: result.exitCode,
-            retryable: isRetryableAgentFailure(result.stderr + "\n" + result.stdout),
+            retryable: isRetryableAgentFailure(
+              result.stderr + "\n" + result.stdout,
+            ),
           });
           if (
             isRetryableAgentFailure(result.stderr + "\n" + result.stdout) &&
             p.attempts < ctx.config.agentMaxAttempts
           ) {
-            const retryAfterMs = dependencies.now() + ctx.config.agentRetryDelaySec * 1000;
+            const retryAfterMs =
+              dependencies.now() + ctx.config.agentRetryDelaySec * 1000;
             repoState.pauseBatchForRetry({
               batch: p,
               retryAfterMs,
@@ -165,9 +169,16 @@ function summarizeBatch(p: PRCommentPayload, commitCount: number): string {
         .filter((path): path is string => Boolean(path)),
     ),
   ];
-  const authors = [...new Set(p.comments.map((comment) => `@${comment.author}`))];
-  const fileText = files.length > 0 ? ` on ${files.slice(0, 5).join(", ")}` : "";
-  const moreFiles = files.length > 5 ? ` and ${files.length - 5} more file(s)` : "";
-  const result = commitCount > 0 ? `produced ${commitCount} commit(s)` : "produced no commits";
+  const authors = [
+    ...new Set(p.comments.map((comment) => `@${comment.author}`)),
+  ];
+  const fileText =
+    files.length > 0 ? ` on ${files.slice(0, 5).join(", ")}` : "";
+  const moreFiles =
+    files.length > 5 ? ` and ${files.length - 5} more file(s)` : "";
+  const result =
+    commitCount > 0
+      ? `produced ${commitCount} commit(s)`
+      : "produced no commits";
   return `Handled batch from ${authors.join(", ")} with ${p.comments.length} comment(s)${fileText}${moreFiles}; ${result}`;
 }

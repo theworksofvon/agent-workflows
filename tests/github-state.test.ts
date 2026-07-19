@@ -46,10 +46,16 @@ test("ready batches are not marked processed until completed", () => {
 
     const [batch] = state.takeReadyCommentBatches(2_000, immediatePolicy);
     assert.equal(batch.comments.length, 1);
-    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), false);
+    assert.equal(
+      state.hasProcessedComment("local-owner/sample-repo#1:review:100"),
+      false,
+    );
 
     state.markBatchCompleted(batch);
-    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), true);
+    assert.equal(
+      state.hasProcessedComment("local-owner/sample-repo#1:review:100"),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -79,7 +85,10 @@ test("retryable failures pause and later re-emit the batch", () => {
       },
     });
 
-    const [firstAttempt] = state.takeReadyCommentBatches(2_000, immediatePolicy);
+    const [firstAttempt] = state.takeReadyCommentBatches(
+      2_000,
+      immediatePolicy,
+    );
     assert.equal(firstAttempt.attempts, 1);
     state.pauseBatchForRetry({
       batch: firstAttempt as PRCommentPayload,
@@ -89,7 +98,13 @@ test("retryable failures pause and later re-emit the batch", () => {
     state.addPendingComment({
       groupKey: "pr:1:review:10",
       now: 3_000,
-      pr: { number: 1, title: "Updated title", body: "body", headRef: "feature/test", baseRef: "main" },
+      pr: {
+        number: 1,
+        title: "Updated title",
+        body: "body",
+        headRef: "feature/test",
+        baseRef: "main",
+      },
       comment: {
         key: "local-owner/sample-repo#1:review:101",
         id: 101,
@@ -101,11 +116,20 @@ test("retryable failures pause and later re-emit the batch", () => {
     });
 
     assert.deepEqual(state.takeReadyCommentBatches(4_000, immediatePolicy), []);
-    const [secondAttempt] = state.takeReadyCommentBatches(5_000, immediatePolicy);
+    const [secondAttempt] = state.takeReadyCommentBatches(
+      5_000,
+      immediatePolicy,
+    );
     assert.equal(secondAttempt.attempts, 2);
     assert.equal(secondAttempt.comments.length, 2);
-    assert.equal(secondAttempt.comments[0].key, "local-owner/sample-repo#1:review:100");
-    assert.equal(state.hasProcessedComment("local-owner/sample-repo#1:review:100"), false);
+    assert.equal(
+      secondAttempt.comments[0].key,
+      "local-owner/sample-repo#1:review:100",
+    );
+    assert.equal(
+      state.hasProcessedComment("local-owner/sample-repo#1:review:100"),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -209,31 +233,97 @@ test("state persists initialization, ordered pending comments, duplicate guards,
     state.markPollingInitialized();
     state.markPollingInitialized();
     assert.equal(state.isPollingInitialized(), true);
-    const pr = { number: 1, title: "PR", body: "body", headRef: "head", baseRef: "base" };
-    const add = (key: string, id: number, createdAt: number, now: number) => state.addPendingComment({
-      groupKey: "group",
-      pr,
-      now,
-      comment: { key, id, kind: "issue", author: "author", body: key, createdAt: new Date(createdAt).toISOString() },
-    });
+    const pr = {
+      number: 1,
+      title: "PR",
+      body: "body",
+      headRef: "head",
+      baseRef: "base",
+    };
+    const add = (key: string, id: number, createdAt: number, now: number) =>
+      state.addPendingComment({
+        groupKey: "group",
+        pr,
+        now,
+        comment: {
+          key,
+          id,
+          kind: "issue",
+          author: "author",
+          body: key,
+          createdAt: new Date(createdAt).toISOString(),
+        },
+      });
     add("later", 3, 3_000, 3_000);
     add("same-high", 2, 1_000, 4_000);
     add("same-low", 1, 1_000, 5_000);
     add("same-low", 1, 1_000, 6_000);
-    assert.deepEqual(state.takeReadyCommentBatches(5_001, { quietWindowMs: 10, minComments: 1, maxWaitMs: 0 }), []);
+    assert.deepEqual(
+      state.takeReadyCommentBatches(5_001, {
+        quietWindowMs: 10,
+        minComments: 1,
+        maxWaitMs: 0,
+      }),
+      [],
+    );
     const [batch] = state.takeReadyCommentBatches(5_010, immediatePolicy);
-    assert.deepEqual(batch.comments.map((comment) => comment.id), [1, 2, 3]);
+    assert.deepEqual(
+      batch.comments.map((comment) => comment.id),
+      [1, 2, 3],
+    );
 
-    state.recordPrHistory(1, { batchId: "one", handledAt: "1", agent: "a", exitCode: 0, commitCount: 0, commentKeys: ["one"], summary: "one" });
-    state.recordPrHistory(1, { batchId: "two", handledAt: "2", agent: "a", exitCode: 0, commitCount: 0, commentKeys: ["two"], summary: "two" });
-    state.recordPrHistory(1, { batchId: "three", handledAt: "3", agent: "a", exitCode: 0, commitCount: 0, commentKeys: ["three"], summary: "three" });
-    assert.deepEqual(state.getRecentPrHistory(1, 1).map((entry) => entry.batchId), ["three"]);
+    state.recordPrHistory(1, {
+      batchId: "one",
+      handledAt: "1",
+      agent: "a",
+      exitCode: 0,
+      commitCount: 0,
+      commentKeys: ["one"],
+      summary: "one",
+    });
+    state.recordPrHistory(1, {
+      batchId: "two",
+      handledAt: "2",
+      agent: "a",
+      exitCode: 0,
+      commitCount: 0,
+      commentKeys: ["two"],
+      summary: "two",
+    });
+    state.recordPrHistory(1, {
+      batchId: "three",
+      handledAt: "3",
+      agent: "a",
+      exitCode: 0,
+      commitCount: 0,
+      commentKeys: ["three"],
+      summary: "three",
+    });
+    assert.deepEqual(
+      state.getRecentPrHistory(1, 1).map((entry) => entry.batchId),
+      ["three"],
+    );
     assert.deepEqual(state.getRecentPrHistory(99, 5), []);
 
-    const entry = { reviewedAt: "now", agent: "a", findingCount: 2, postedFindingCount: 1, dryRun: false, summary: "review" };
+    const entry = {
+      reviewedAt: "now",
+      agent: "a",
+      findingCount: 2,
+      postedFindingCount: 1,
+      dryRun: false,
+      summary: "review",
+    };
     state.recordReviewRun({ prNumber: 1, entry, postedFindingKeys: [] });
-    state.recordReviewRun({ prNumber: 1, entry, postedFindingKeys: ["one", "two"] });
-    state.recordReviewRun({ prNumber: 1, entry, postedFindingKeys: ["two", "three"] });
+    state.recordReviewRun({
+      prNumber: 1,
+      entry,
+      postedFindingKeys: ["one", "two"],
+    });
+    state.recordReviewRun({
+      prNumber: 1,
+      entry,
+      postedFindingKeys: ["two", "three"],
+    });
     assert.deepEqual(state.getPostedReviewFindingKeys(1), ["two", "three"]);
     assert.deepEqual(state.getPostedReviewFindingKeys(99), []);
 
@@ -254,50 +344,96 @@ test("state normalizes legacy files, infers cursors, applies zero limits, and re
     const dir = join(root, "state", "github", "local-owner");
     mkdirSync(dir, { recursive: true });
     const file = join(dir, "sample-repo.json");
-    writeFileSync(file, JSON.stringify({
-      cursors: { issueCommentId: 7 },
-      prs: {
-        "1": {
-          cursors: { issueCommentId: 99 },
-          commentBatchHistory: [{
-            batchId: "legacy", handledAt: "now", agent: "a", exitCode: 0, commitCount: 0,
-            commentKeys: ["repo#1:issue:12", "repo#1:review:20", "bad-key", "repo#1:issue:3"], summary: "legacy",
-          }],
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cursors: { issueCommentId: 7 },
+        prs: {
+          "1": {
+            cursors: { issueCommentId: 99 },
+            commentBatchHistory: [
+              {
+                batchId: "legacy",
+                handledAt: "now",
+                agent: "a",
+                exitCode: 0,
+                commitCount: 0,
+                commentKeys: [
+                  "repo#1:issue:12",
+                  "repo#1:review:20",
+                  "bad-key",
+                  "repo#1:issue:3",
+                ],
+                summary: "legacy",
+              },
+            ],
+          },
         },
+      }),
+    );
+    const state = new GitHubRepoStateStore(
+      join(root, "state"),
+      { owner: "local-owner", repo: "sample-repo" },
+      {
+        processedCommentKeyLimit: 0,
+        commentBatchHistoryLimit: 0,
       },
-    }));
-    const state = new GitHubRepoStateStore(join(root, "state"), { owner: "local-owner", repo: "sample-repo" }, {
-      processedCommentKeyLimit: 0,
-      commentBatchHistoryLimit: 0,
-    });
+    );
     assert.equal(state.isPollingInitialized(), true);
     assert.equal(state.getIssueCommentCursor(1), 99);
     assert.equal(state.getReviewCommentCursor(1), 20);
     assert.deepEqual(state.getRecentPrHistory(1, 0), []);
-    state.recordPrHistory(2, { batchId: "gone", handledAt: "", agent: "", exitCode: 0, commitCount: 0, commentKeys: [], summary: "" });
+    state.recordPrHistory(2, {
+      batchId: "gone",
+      handledAt: "",
+      agent: "",
+      exitCode: 0,
+      commitCount: 0,
+      commentKeys: [],
+      summary: "",
+    });
     assert.deepEqual(state.getRecentPrHistory(2, 2), []);
     state.recordReviewRun({
       prNumber: 2,
-      entry: { reviewedAt: "", agent: "", findingCount: 0, postedFindingCount: 0, dryRun: false, summary: "" },
+      entry: {
+        reviewedAt: "",
+        agent: "",
+        findingCount: 0,
+        postedFindingCount: 0,
+        dryRun: false,
+        summary: "",
+      },
       postedFindingKeys: ["gone"],
     });
     assert.deepEqual(state.getPostedReviewFindingKeys(2), []);
 
-    writeFileSync(file, JSON.stringify({
-      pollingInitialized: false,
-      cursors: { issueCommentId: 1, reviewCommentId: 2 },
-      pendingCommentGroups: {},
-      processedCommentKeys: ["saved"],
-      prs: {
-        "3": {
-          cursors: { reviewCommentId: 33 },
-          commentBatchHistory: [],
-          reviewRunHistory: [{ reviewedAt: "", agent: "", findingCount: 0, postedFindingCount: 0, dryRun: true, summary: "" }],
-          postedReviewFindingKeys: ["finding"],
+    writeFileSync(
+      file,
+      JSON.stringify({
+        pollingInitialized: false,
+        cursors: { issueCommentId: 1, reviewCommentId: 2 },
+        pendingCommentGroups: {},
+        processedCommentKeys: ["saved"],
+        prs: {
+          "3": {
+            cursors: { reviewCommentId: 33 },
+            commentBatchHistory: [],
+            reviewRunHistory: [
+              {
+                reviewedAt: "",
+                agent: "",
+                findingCount: 0,
+                postedFindingCount: 0,
+                dryRun: true,
+                summary: "",
+              },
+            ],
+            postedReviewFindingKeys: ["finding"],
+          },
+          "4": {},
         },
-        "4": {},
-      },
-    }));
+      }),
+    );
     const explicit = makeState(root);
     assert.equal(explicit.isPollingInitialized(), false);
     assert.equal(explicit.getIssueCommentCursor(3), 0);

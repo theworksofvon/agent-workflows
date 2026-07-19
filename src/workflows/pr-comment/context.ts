@@ -1,4 +1,7 @@
-import type { PRCommentBatchHistory, PRCommentPayload } from "../../github/poller.js";
+import type {
+  PRCommentBatchHistory,
+  PRCommentPayload,
+} from "../../github/poller.js";
 
 /**
  * Builds the rich prompt for the coding agent. This is the heart of the
@@ -11,8 +14,12 @@ export function buildPrompt(
 ): string {
   const lines: string[] = [];
 
-  lines.push("You are a coding review agent resolving GitHub pull request feedback.");
-  lines.push("You are running inside an isolated git worktree for the PR branch. Review the comments, inspect the repository, make the necessary changes, commit them, and stop.");
+  lines.push(
+    "You are a coding review agent resolving GitHub pull request feedback.",
+  );
+  lines.push(
+    "You are running inside an isolated git worktree for the PR branch. Review the comments, inspect the repository, make the necessary changes, commit them, and stop.",
+  );
   lines.push("");
   lines.push(`Repository: ${p.repo.owner}/${p.repo.repo}`);
   lines.push(`PR #${p.prNumber}: ${p.prTitle}`);
@@ -63,18 +70,38 @@ export function buildPrompt(
   lines.push("--- end comments ---");
   lines.push("");
   lines.push("Instructions:");
-  lines.push("- Treat this as PR review work: resolve every actionable comment in this batch, and leave non-actionable comments alone.");
-  lines.push("- First inspect the relevant files, project structure, package scripts, and nearby patterns before editing.");
-  lines.push("- Follow the repository's existing architecture, style, naming, tests, and conventions. Avoid unrelated refactors.");
-  lines.push("- If your environment supports sub-agents or delegation, use them when it helps split independent comments, investigate unfamiliar areas, or parallelize review context gathering.");
-  lines.push("- Keep coordination efficient: group related comments together, avoid duplicate investigation, and reconcile overlapping requests before editing.");
-  lines.push("- Prefer one clear commit when the requested changes are related; use multiple commits only when it improves reviewability.");
-  lines.push("- If you make file changes but fail to commit them, the orchestrator will create a fallback commit before pushing.");
-  lines.push("- Before committing, run the repository's relevant validation for the touched area. Inspect docs, package scripts, CI config, or existing contributor guidance to choose the right commands.");
-  lines.push("- If validation fails, fix the issue and rerun the relevant checks. If a required check cannot be run, explain why in your final response.");
+  lines.push(
+    "- Treat this as PR review work: resolve every actionable comment in this batch, and leave non-actionable comments alone.",
+  );
+  lines.push(
+    "- First inspect the relevant files, project structure, package scripts, and nearby patterns before editing.",
+  );
+  lines.push(
+    "- Follow the repository's existing architecture, style, naming, tests, and conventions. Avoid unrelated refactors.",
+  );
+  lines.push(
+    "- If your environment supports sub-agents or delegation, use them when it helps split independent comments, investigate unfamiliar areas, or parallelize review context gathering.",
+  );
+  lines.push(
+    "- Keep coordination efficient: group related comments together, avoid duplicate investigation, and reconcile overlapping requests before editing.",
+  );
+  lines.push(
+    "- Prefer one clear commit when the requested changes are related; use multiple commits only when it improves reviewability.",
+  );
+  lines.push(
+    "- If you make file changes but fail to commit them, the orchestrator will create a fallback commit before pushing.",
+  );
+  lines.push(
+    "- Before committing, run the repository's relevant validation for the touched area. Inspect docs, package scripts, CI config, or existing contributor guidance to choose the right commands.",
+  );
+  lines.push(
+    "- If validation fails, fix the issue and rerun the relevant checks. If a required check cannot be run, explain why in your final response.",
+  );
   lines.push("- Reference PR #" + p.prNumber + " in the commit message.");
   lines.push("- Do NOT push; the orchestrator will push for you.");
   lines.push("- Do NOT amend or rewrite unrelated history.");
-  lines.push("- Do NOT rework older comments unless the changelog says prior automation missed something relevant to this batch.");
+  lines.push(
+    "- Do NOT rework older comments unless the changelog says prior automation missed something relevant to this batch.",
+  );
   return lines.join("\n");
 }

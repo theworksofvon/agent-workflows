@@ -149,7 +149,9 @@ export class GitHubRepoStateStore {
       prBody: pr.body,
       headRef: pr.headRef,
       baseRef: pr.baseRef,
-      batchId: existing?.batchId ?? `batch:${this.repo.owner}/${this.repo.repo}:${groupKey}:${now}`,
+      batchId:
+        existing?.batchId ??
+        `batch:${this.repo.owner}/${this.repo.repo}:${groupKey}:${now}`,
       groupKey,
       firstSeenAt: new Date(firstSeenAtMs).toISOString(),
       lastSeenAt: new Date(now).toISOString(),
@@ -159,7 +161,8 @@ export class GitHubRepoStateStore {
       retryAfterMs: existing?.retryAfterMs,
       lastError: existing?.lastError,
       comments: [...comments, comment].sort((a, b) => {
-        const byTime = Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
+        const byTime =
+          Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
         return byTime === 0 ? a.id - b.id : byTime;
       }),
     };
@@ -175,8 +178,11 @@ export class GitHubRepoStateStore {
     },
   ): PRCommentPayload[] {
     const ready: PRCommentPayload[] = [];
-    for (const [groupKey, group] of Object.entries(this.state.pendingCommentGroups)) {
-      if (group.retryAfterMs !== undefined && now < group.retryAfterMs) continue;
+    for (const [groupKey, group] of Object.entries(
+      this.state.pendingCommentGroups,
+    )) {
+      if (group.retryAfterMs !== undefined && now < group.retryAfterMs)
+        continue;
       if (now - group.lastSeenAtMs < policy.quietWindowMs) continue;
       const thresholdReached = group.comments.length >= policy.minComments;
       const maximumWaitReached =
@@ -292,7 +298,9 @@ export class GitHubRepoStateStore {
 
   private load(): void {
     if (!existsSync(this.file)) {
-      log.debug("no github repo state file yet, starting fresh", { file: this.file });
+      log.debug("no github repo state file yet, starting fresh", {
+        file: this.file,
+      });
       return;
     }
     try {
@@ -331,11 +339,15 @@ function normalizeState(raw: unknown): GitHubRepoState {
   const state = raw as Partial<GitHubRepoState>;
   const prs: Record<string, GitHubPullRequestState> = {};
   for (const [prNumber, prState] of Object.entries(state.prs ?? {})) {
-    const inferredCursors = inferCursorsFromHistory(prState.commentBatchHistory ?? []);
+    const inferredCursors = inferCursorsFromHistory(
+      prState.commentBatchHistory ?? [],
+    );
     prs[prNumber] = {
       cursors: {
-        issueCommentId: prState.cursors?.issueCommentId ?? inferredCursors.issueCommentId,
-        reviewCommentId: prState.cursors?.reviewCommentId ?? inferredCursors.reviewCommentId,
+        issueCommentId:
+          prState.cursors?.issueCommentId ?? inferredCursors.issueCommentId,
+        reviewCommentId:
+          prState.cursors?.reviewCommentId ?? inferredCursors.reviewCommentId,
       },
       commentBatchHistory: prState.commentBatchHistory ?? [],
       reviewRunHistory: prState.reviewRunHistory ?? [],
@@ -356,7 +368,9 @@ function normalizeState(raw: unknown): GitHubRepoState {
   };
 }
 
-function inferCursorsFromHistory(history: PRCommentBatchHistory[]): GitHubRepoCursors {
+function inferCursorsFromHistory(
+  history: PRCommentBatchHistory[],
+): GitHubRepoCursors {
   const cursors = { issueCommentId: 0, reviewCommentId: 0 };
   for (const entry of history) {
     for (const key of entry.commentKeys) {

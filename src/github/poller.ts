@@ -73,11 +73,18 @@ export function githubPoller(args: {
     return author.toLowerCase().endsWith("[bot]");
   }
 
-  function commentKey(repo: RepoSpec, prNumber: number, kind: "issue" | "review", id: number): string {
+  function commentKey(
+    repo: RepoSpec,
+    prNumber: number,
+    kind: "issue" | "review",
+    id: number,
+  ): string {
     return `${repo.owner}/${repo.repo}#${prNumber}:${kind}:${id}`;
   }
 
-  async function pollRepo(repo: RepoSpec): Promise<Array<Event<PRCommentPayload>>> {
+  async function pollRepo(
+    repo: RepoSpec,
+  ): Promise<Array<Event<PRCommentPayload>>> {
     const events: Array<Event<PRCommentPayload>> = [];
     const now = Date.now();
     const state = GitHubRepoStateStore.fromConfig(config, repo);
@@ -117,7 +124,10 @@ export function githubPoller(args: {
           },
         });
       }
-      const maxIssue = issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue);
+      const maxIssue = issueComments.reduce(
+        (m, c) => Math.max(m, c.id),
+        lastIssue,
+      );
       state.setIssueCommentCursor(pr.number, maxIssue);
 
       // --- inline review comments ---
@@ -143,11 +153,18 @@ export function githubPoller(args: {
             body: c.body,
             createdAt: c.createdAt,
             reviewId: c.reviewId,
-            review: { path: c.path, line: c.line ?? c.originalLine, diffHunk: c.diffHunk },
+            review: {
+              path: c.path,
+              line: c.line ?? c.originalLine,
+              diffHunk: c.diffHunk,
+            },
           },
         });
       }
-      const maxReview = reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview);
+      const maxReview = reviewComments.reduce(
+        (m, c) => Math.max(m, c.id),
+        lastReview,
+      );
       state.setReviewCommentCursor(pr.number, maxReview);
     }
 

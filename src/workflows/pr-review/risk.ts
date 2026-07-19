@@ -6,7 +6,8 @@ export interface AdversarialDecision {
   reasons: string[];
 }
 
-const SENSITIVE_PATH = /(^|\/)(auth|security|crypto|payment|billing|permission|migration|migrations|schema|database|db)(\/|\.|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.github\/workflows\/)/i;
+const SENSITIVE_PATH =
+  /(^|\/)(auth|security|crypto|payment|billing|permission|migration|migrations|schema|database|db)(\/|\.|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.github\/workflows\/)/i;
 
 export function decideAdversarialReview(
   mode: ReviewAdversarialMode,
@@ -23,11 +24,21 @@ export function decideAdversarialReview(
   );
   if (ctx.files.length >= 12) reasons.push(`many-files:${ctx.files.length}`);
   if (changedLines >= 400) reasons.push(`large-diff:${changedLines}`);
-  if (ctx.files.some((file) => SENSITIVE_PATH.test(file.path))) reasons.push("sensitive-path");
-  if (ctx.files.some((file) => file.patch === null)) reasons.push("missing-patch");
-  if (primary.findings.some((finding) => finding.severity === "critical" || finding.severity === "high")) {
+  if (ctx.files.some((file) => SENSITIVE_PATH.test(file.path)))
+    reasons.push("sensitive-path");
+  if (ctx.files.some((file) => file.patch === null))
+    reasons.push("missing-patch");
+  if (
+    primary.findings.some(
+      (finding) =>
+        finding.severity === "critical" || finding.severity === "high",
+    )
+  ) {
     reasons.push("high-severity-primary-finding");
   }
 
-  return { run: reasons.length > 0, reasons: reasons.length > 0 ? reasons : ["low-risk"] };
+  return {
+    run: reasons.length > 0,
+    reasons: reasons.length > 0 ? reasons : ["low-risk"],
+  };
 }

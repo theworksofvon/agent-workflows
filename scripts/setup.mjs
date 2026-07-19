@@ -23,13 +23,17 @@ run(packageManager, ["run", "build"]);
 const envPath = join(repoRoot, ".env");
 if (!existsSync(envPath)) {
   copyFileSync(join(repoRoot, ".env.example"), envPath);
-  console.log("Created .env from .env.example; replace the placeholder values before running.");
+  console.log(
+    "Created .env from .env.example; replace the placeholder values before running.",
+  );
 } else {
   console.log("Kept existing .env.");
 }
 
 run(process.execPath, [join(repoRoot, "scripts", "install-shared-skills.mjs")]);
-console.log("\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm run doctor");
+console.log(
+  "\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm run doctor",
+);
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit" });

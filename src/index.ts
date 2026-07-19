@@ -85,7 +85,9 @@ export async function runCli(
   await daemon.start();
 }
 
-export function printHelp(writeLine: (line: string) => void = console.log): void {
+export function printHelp(
+  writeLine: (line: string) => void = console.log,
+): void {
   writeLine(`agent-workflows
 
 Usage:
@@ -108,8 +110,15 @@ export async function runReviewCommand(
   const dryRun = args.includes("--dry-run");
   const forceAdversarial = args.includes("--adversarial");
   const skipAdversarial = args.includes("--no-adversarial");
-  const knownFlags = new Set(["--post", "--dry-run", "--adversarial", "--no-adversarial"]);
-  const unknownFlags = args.filter((arg) => arg.startsWith("--") && !knownFlags.has(arg));
+  const knownFlags = new Set([
+    "--post",
+    "--dry-run",
+    "--adversarial",
+    "--no-adversarial",
+  ]);
+  const unknownFlags = args.filter(
+    (arg) => arg.startsWith("--") && !knownFlags.has(arg),
+  );
 
   if (unknownFlags.length > 0) {
     throw new Error(`Unknown review option(s): ${unknownFlags.join(", ")}`);
@@ -118,7 +127,9 @@ export async function runReviewCommand(
     throw new Error("Usage: pnpm review owner/repo#123 [--post] [--dry-run]");
   }
   if (targetArgs.length > 1) {
-    throw new Error(`Review mode accepts one PR target, received: ${targetArgs.join(", ")}`);
+    throw new Error(
+      `Review mode accepts one PR target, received: ${targetArgs.join(", ")}`,
+    );
   }
   if (post && dryRun) {
     throw new Error("Use either --post or --dry-run, not both.");
@@ -135,9 +146,10 @@ export async function runReviewCommand(
     : skipAdversarial
       ? "off"
       : config.reviewAdversarialMode;
-  const adversarialAgent = adversarialMode === "off"
-    ? undefined
-    : dependencies.getAgent(config.reviewAdversarialAgent, config);
+  const adversarialAgent =
+    adversarialMode === "off"
+      ? undefined
+      : dependencies.getAgent(config.reviewAdversarialAgent, config);
   const workflow = dependencies.createReviewWorkflow();
   const result = await workflow.run({
     config,
@@ -168,14 +180,18 @@ export function printReviewResult(
     writeLine(`Skipped duplicate findings: ${result.skippedDuplicateFindings}`);
   }
   if (result.skippedUnpostableFindings > 0) {
-    writeLine(`Skipped unpostable findings: ${result.skippedUnpostableFindings}`);
+    writeLine(
+      `Skipped unpostable findings: ${result.skippedUnpostableFindings}`,
+    );
   }
   if (result.newFindings.length === 0) {
     writeLine("No new actionable findings.");
     return;
   }
   for (const finding of result.newFindings) {
-    writeLine(`- ${finding.path}:${finding.line} [${finding.severity}] ${finding.body}`);
+    writeLine(
+      `- ${finding.path}:${finding.line} [${finding.severity}] ${finding.body}`,
+    );
   }
 }
 
@@ -185,11 +201,14 @@ export async function runEntryPoint(
   dependencies: CliDependencies = defaultCliDependencies,
 ): Promise<boolean> {
   const script = argv[1];
-  if (!script || pathToFileURL(resolve(script)).href !== moduleUrl) return false;
+  if (!script || pathToFileURL(resolve(script)).href !== moduleUrl)
+    return false;
   try {
     await runCli(argv.slice(2), dependencies);
   } catch (err) {
-    log.error("fatal startup error", { error: err instanceof Error ? err.stack : String(err) });
+    log.error("fatal startup error", {
+      error: err instanceof Error ? err.stack : String(err),
+    });
     dependencies.exit(1);
   }
   return true;

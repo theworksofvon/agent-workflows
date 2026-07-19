@@ -24,7 +24,10 @@ export function claudeCodeAdapter(opts: { binary: string }): AgentAdapter {
         child.stderr.on("data", (d) => (stderr += d.toString()));
 
         child.on("error", (err) => {
-          log.error("failed to spawn agent", { binary: opts.binary, error: String(err) });
+          log.error("failed to spawn agent", {
+            binary: opts.binary,
+            error: String(err),
+          });
           resolve({ exitCode: -1, stdout, stderr: stderr + String(err) });
         });
 

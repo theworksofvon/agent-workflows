@@ -52,7 +52,11 @@ function installLink(source, target) {
     if (realpathOrResolved(current) === realpathOrResolved(source)) return;
     unlinkSync(target);
   }
-  symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+  symlinkSync(
+    source,
+    target,
+    process.platform === "win32" ? "junction" : "dir",
+  );
 }
 
 function fileExists(path, followLinks = true) {

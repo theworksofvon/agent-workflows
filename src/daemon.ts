@@ -10,7 +10,10 @@ import { log } from "./log.js";
 export interface DaemonDependencies {
   queue?: SerialQueue;
   getWorkflow?: typeof getWorkflow;
-  setTimeout?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+  setTimeout?: (
+    callback: () => void,
+    delay: number,
+  ) => ReturnType<typeof setTimeout>;
   clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
@@ -90,7 +93,10 @@ export class Daemon {
       for (const event of events) {
         const wf = this.findWorkflow(event.kind);
         if (!wf) {
-          log.warn("no workflow registered for event kind", { kind: event.kind, id: event.id });
+          log.warn("no workflow registered for event kind", {
+            kind: event.kind,
+            id: event.id,
+          });
           continue;
         }
         const ctx = this.makeRunCtx();
