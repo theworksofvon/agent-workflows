@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Narrow Supported CI Platforms
+
+Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `agent/drop-windows-ci`.
+Task: Align the post-merge matrix with the operating systems this project intends to support.
+Message: Main-branch validation now targets Linux and macOS; Windows is explicitly outside the supported CI surface.
+Added/Changed: Simplified Python test execution to use `python3` directly and documented the supported CI platforms.
+Fixed/Removed: Removed the Windows matrix runner, the Windows-only Python launcher shim, and Windows-specific setup-test environment handling after the first post-merge run showed those paths require platform-specific command execution the project does not need.
+Handoff: Verify the full deterministic suite on Linux or macOS and confirm the next main-branch workflow passes both supported platform jobs, quality gates, and the production dependency audit.
+
 ### Expand CI Validation Tiers
 
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
