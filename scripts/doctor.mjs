@@ -21,7 +21,7 @@ let warnings = 0;
 check(Number(process.versions.node.split(".")[0]) === 24, `Node ${process.versions.node}`, "Node 24 is required");
 checkCommand("git", ["--version"], "Git");
 checkCommand("pnpm", ["--version"], "pnpm");
-check(existsSync(envPath), ".env exists", "Run pnpm setup to create .env");
+check(existsSync(envPath), ".env exists", "Run pnpm run setup to create .env");
 check(
   existsSync(join(repoRoot, "dist", "index.js")),
   "Compiled production entrypoint exists",

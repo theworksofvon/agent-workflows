@@ -29,7 +29,7 @@ if (!existsSync(envPath)) {
 }
 
 run(process.execPath, [join(repoRoot, "scripts", "install-shared-skills.mjs")]);
-console.log("\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm doctor");
+console.log("\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm run doctor");
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit" });

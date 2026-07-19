@@ -35,11 +35,11 @@ git clone <repository-url>
 cd agent-workflows
 nvm use                       # or install Node 24 another way
 corepack enable
-corepack install --global pnpm@11.12.0
-pnpm setup
+corepack install --global pnpm@11.15.0
+pnpm run setup
 ```
 
-`pnpm setup` installs locked dependencies, builds production JavaScript,
+`pnpm run setup` installs locked dependencies, builds production JavaScript,
 creates `.env` without overwriting an existing one, and links portable skills
 into the personal skill directories for Codex, Claude Code, and Cursor.
 
@@ -71,7 +71,7 @@ normally means repository Contents, Pull requests, and Issues read/write access.
 ### 4. Verify and run
 
 ```bash
-pnpm doctor
+pnpm run doctor
 pnpm start
 ```
 
@@ -85,8 +85,8 @@ service manager if it must survive terminal exits or machine restarts.
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm setup` | Install dependencies, create `.env`, and install shared skills. |
-| `pnpm doctor` | Validate a machine before starting the daemon. |
+| `pnpm run setup` | Install dependencies, create `.env`, and install shared skills. |
+| `pnpm run doctor` | Validate a machine before starting the daemon. |
 | `pnpm build` | Compile TypeScript and source maps into `dist/`. |
 | `pnpm start` | Run the compiled daemon with Node. |
 | `pnpm dev` | Run with source watching. |
@@ -216,7 +216,7 @@ pnpm check:scripts
 pnpm test
 pnpm test:smoke
 pnpm test:python
-pnpm doctor
+pnpm run doctor
 ```
 
 These are the authoritative local verification commands. `pnpm test` positively

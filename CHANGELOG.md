@@ -7,8 +7,8 @@
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
 Task: Migrate repository installation, development, testing, and CI workflows from npm to pnpm.
 Message: Clean installs and contributor commands now use a pinned pnpm 11 release and a pnpm-native lockfile.
-Added/Changed: Added `pnpm@11.12.0` package-manager metadata, `pnpm-lock.yaml`, an explicit dependency-build allowlist, Corepack bootstrap instructions, pnpm-aware setup and doctor scripts, pnpm CI setup and caching, and pnpm CLI examples throughout current documentation.
-Fixed/Removed: Removed `package-lock.json` and current npm command assumptions so local machines and GitHub Actions resolve dependencies through the same package manager.
+Added/Changed: Added `pnpm@11.15.0` package-manager metadata, `pnpm-lock.yaml`, an explicit dependency-build allowlist, Corepack bootstrap instructions, pnpm-aware setup and doctor scripts, pnpm CI setup and caching, and pnpm CLI examples throughout current documentation.
+Fixed/Removed: Removed `package-lock.json` and current npm command assumptions so local machines and GitHub Actions resolve dependencies through the same package manager; replaced the deprecated pnpm 11.12 CI installer path with the latest pnpm release; disambiguated repository setup and doctor scripts from pnpm's built-in commands.
 Handoff: Verify with `pnpm install --frozen-lockfile`, then run the authoritative pnpm typecheck, build, script, Node, smoke, and Python test commands.
 
 ### Enforce Complete Runtime Coverage
