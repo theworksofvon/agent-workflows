@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const skipInstall = process.argv.includes("--skip-install");
 const nodeMajor = Number(process.versions.node.split(".")[0]);
+const packageManager = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 if (nodeMajor !== 24) {
   console.error(`Node 24 is required; found ${process.versions.node}.`);
@@ -14,10 +15,10 @@ if (nodeMajor !== 24) {
 }
 
 if (!skipInstall) {
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["ci"]);
+  run(packageManager, ["install", "--frozen-lockfile"]);
 }
 
-run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"]);
+run(packageManager, ["run", "build"]);
 
 const envPath = join(repoRoot, ".env");
 if (!existsSync(envPath)) {
@@ -28,7 +29,7 @@ if (!existsSync(envPath)) {
 }
 
 run(process.execPath, [join(repoRoot, "scripts", "install-shared-skills.mjs")]);
-console.log("\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: npm run doctor");
+console.log("\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm doctor");
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit" });

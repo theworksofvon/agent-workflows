@@ -5,26 +5,26 @@ Run the configured agent as a reviewer for one pull request without changing cod
 Dry-run first:
 
 ```bash
-npm run review -- owner/repo#123
+pnpm review owner/repo#123
 ```
 
 Post one grouped GitHub review:
 
 ```bash
-npm run review -- owner/repo#123 --post
+pnpm review owner/repo#123 --post
 ```
 
 GitHub PR URLs work too:
 
 ```bash
-npm run review -- https://github.com/owner/repo/pull/123
+pnpm review https://github.com/owner/repo/pull/123
 ```
 
 Force or suppress the independent adversarial pass for one run:
 
 ```bash
-npm run review -- owner/repo#123 --adversarial
-npm run review -- owner/repo#123 --no-adversarial
+pnpm review owner/repo#123 --adversarial
+pnpm review owner/repo#123 --no-adversarial
 ```
 
 ## What It Does

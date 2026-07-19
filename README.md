@@ -23,7 +23,7 @@ PR feedback → poll and batch → isolated worktree → coding agent → guarde
 ### Prerequisites
 
 - Git
-- Node 24 and npm 11 (`.nvmrc` and `package.json` pin the supported runtime)
+- Node 24 and pnpm 11 (`.nvmrc` and `package.json` pin the supported runtime)
 - A GitHub token
 - At least one supported agent CLI: Codex, Claude Code, or ZCode
 - Python 3.11+ only when using the model-orchestrator telemetry runner
@@ -34,10 +34,12 @@ PR feedback → poll and batch → isolated worktree → coding agent → guarde
 git clone <repository-url>
 cd agent-workflows
 nvm use                       # or install Node 24 another way
-npm run setup
+corepack enable
+corepack install --global pnpm@11.12.0
+pnpm setup
 ```
 
-`npm run setup` installs locked dependencies, builds production JavaScript,
+`pnpm setup` installs locked dependencies, builds production JavaScript,
 creates `.env` without overwriting an existing one, and links portable skills
 into the personal skill directories for Codex, Claude Code, and Cursor.
 
@@ -69,8 +71,8 @@ normally means repository Contents, Pull requests, and Issues read/write access.
 ### 4. Verify and run
 
 ```bash
-npm run doctor
-npm start
+pnpm doctor
+pnpm start
 ```
 
 `doctor` checks the runtime, Git, `.env`, the selected agent executable and
@@ -83,19 +85,19 @@ service manager if it must survive terminal exits or machine restarts.
 
 | Command | Purpose |
 | --- | --- |
-| `npm run setup` | Install dependencies, create `.env`, and install shared skills. |
-| `npm run doctor` | Validate a machine before starting the daemon. |
-| `npm run build` | Compile TypeScript and source maps into `dist/`. |
-| `npm start` | Run the compiled daemon with Node. |
-| `npm run dev` | Run with source watching. |
-| `npm run review -- owner/repo#123` | Review a PR locally without posting or changing files. |
-| `npm run review -- owner/repo#123 --post` | Post new actionable findings as one grouped review. |
-| `npm run skills:install` | Refresh Codex, Claude, and Cursor links after adding a skill. |
-| `npm test` | Run Node tests with exact 100% line, branch, and function coverage for `src/**/*.ts`. |
-| `npm run test:smoke` | Exercise compiled CLI help routes without credentials or network access. |
-| `npm run test:python` | Run the Python model-orchestrator test suite. |
-| `npm run test:typecheck` | Strictly typecheck the TypeScript test suite. |
-| `npm run typecheck && npm run test:typecheck && npm run build && npm run check:scripts && npm test && npm run test:smoke && npm run test:python` | Run the authoritative no-token verification suite. |
+| `pnpm setup` | Install dependencies, create `.env`, and install shared skills. |
+| `pnpm doctor` | Validate a machine before starting the daemon. |
+| `pnpm build` | Compile TypeScript and source maps into `dist/`. |
+| `pnpm start` | Run the compiled daemon with Node. |
+| `pnpm dev` | Run with source watching. |
+| `pnpm review owner/repo#123` | Review a PR locally without posting or changing files. |
+| `pnpm review owner/repo#123 --post` | Post new actionable findings as one grouped review. |
+| `pnpm skills:install` | Refresh Codex, Claude, and Cursor links after adding a skill. |
+| `pnpm test` | Run Node tests with exact 100% line, branch, and function coverage for `src/**/*.ts`. |
+| `pnpm test:smoke` | Exercise compiled CLI help routes without credentials or network access. |
+| `pnpm test:python` | Run the Python model-orchestrator test suite. |
+| `pnpm test:typecheck` | Strictly typecheck the TypeScript test suite. |
+| `pnpm typecheck && pnpm test:typecheck && pnpm build && pnpm check:scripts && pnpm test && pnpm test:smoke && pnpm test:python` | Run the authoritative no-token verification suite. |
 
 Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 `--no-adversarial` to override the configured review policy. See
@@ -103,7 +105,7 @@ Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 
 The compiled production process remains terminal-friendly: logs stream live,
 `Ctrl+C` performs graceful shutdown, and child agent/Git processes behave the
-same as in development. Use `npm run dev` when automatic restart after source
+same as in development. Use `pnpm dev` when automatic restart after source
 edits is desired.
 
 ## Token-aware comment batching
@@ -155,7 +157,7 @@ The installer links each skill into:
 ~/.cursor/skills/
 ```
 
-Edits therefore reach all three tools immediately. Run `npm run skills:install`
+Edits therefore reach all three tools immediately. Run `pnpm skills:install`
 after adding a new skill. Restart Claude Code or open a new Cursor chat when a
 new personal skill directory is introduced. Tool-managed system/plugin skills
 remain owned by their respective runtimes and are not mirrored.
@@ -206,18 +208,18 @@ Retention, retry, and binary override settings are documented in
 ## Development
 
 ```bash
-npm ci
-npm run typecheck
-npm run test:typecheck
-npm run build
-npm run check:scripts
-npm test
-npm run test:smoke
-npm run test:python
-npm run doctor
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test:typecheck
+pnpm build
+pnpm check:scripts
+pnpm test
+pnpm test:smoke
+pnpm test:python
+pnpm doctor
 ```
 
-These are the authoritative local verification commands. `npm test` positively
+These are the authoritative local verification commands. `pnpm test` positively
 includes every production TypeScript file under `src/` and fails below 100% for
 lines, branches, or functions. The smoke suite runs only compiled help paths, so
 it needs no token, repository configuration, or agent binary. GitHub Actions

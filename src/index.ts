@@ -89,8 +89,8 @@ export function printHelp(writeLine: (line: string) => void = console.log): void
   writeLine(`agent-workflows
 
 Usage:
-  npm start
-  npm run review -- owner/repo#123 [--post] [--adversarial|--no-adversarial]
+  pnpm start
+  pnpm review owner/repo#123 [--post] [--adversarial|--no-adversarial]
 
 Commands:
   daemon   Poll configured repositories and process ready comment batches (default)
@@ -115,7 +115,7 @@ export async function runReviewCommand(
     throw new Error(`Unknown review option(s): ${unknownFlags.join(", ")}`);
   }
   if (!targetArg) {
-    throw new Error("Usage: npm run review -- owner/repo#123 [--post] [--dry-run]");
+    throw new Error("Usage: pnpm review owner/repo#123 [--post] [--dry-run]");
   }
   if (targetArgs.length > 1) {
     throw new Error(`Review mode accepts one PR target, received: ${targetArgs.join(", ")}`);

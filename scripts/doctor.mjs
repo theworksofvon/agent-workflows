@@ -20,11 +20,12 @@ let warnings = 0;
 
 check(Number(process.versions.node.split(".")[0]) === 24, `Node ${process.versions.node}`, "Node 24 is required");
 checkCommand("git", ["--version"], "Git");
-check(existsSync(envPath), ".env exists", "Run npm run setup to create .env");
+checkCommand("pnpm", ["--version"], "pnpm");
+check(existsSync(envPath), ".env exists", "Run pnpm setup to create .env");
 check(
   existsSync(join(repoRoot, "dist", "index.js")),
   "Compiled production entrypoint exists",
-  "Run npm run build to create dist/index.js",
+  "Run pnpm build to create dist/index.js",
 );
 
 const token = env.GITHUB_TOKEN ?? "";
@@ -60,7 +61,7 @@ for (const runtime of [".codex", ".claude", ".cursor"]) {
   if (missing.length === 0) {
     pass(`${runtime} portable skills are linked`);
   } else {
-    warn(`${runtime} is missing shared skills: ${missing.join(", ")}; run npm run skills:install`);
+    warn(`${runtime} is missing shared skills: ${missing.join(", ")}; run pnpm skills:install`);
   }
 }
 
