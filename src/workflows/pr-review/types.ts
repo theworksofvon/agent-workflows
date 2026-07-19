@@ -19,6 +19,9 @@ export interface ReviewResult {
   findings: ReviewFinding[];
 }
 
+/** Severities accepted by the structured review result contract. */
+export const REVIEW_SEVERITIES = ["critical", "high", "medium", "low"] as const;
+
 export interface ReviewRunSummary {
   reviewedAt: string;
   agent: string;

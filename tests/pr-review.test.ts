@@ -8,7 +8,10 @@ import type { AgentAdapter, AgentRunInput, AgentRunResult } from "../src/agents/
 import type { Config } from "../src/config.js";
 import { GitHubRepoStateStore } from "../src/github/state.js";
 import { buildReviewPrompt } from "../src/workflows/pr-review/context.js";
-import { PullRequestReviewWorkflow } from "../src/workflows/pr-review/index.js";
+import {
+  parseRightSidePatchLines,
+  PullRequestReviewWorkflow,
+} from "../src/workflows/pr-review/index.js";
 import { findingFingerprint, parseReviewResult } from "../src/workflows/pr-review/parser.js";
 import { decideAdversarialReview } from "../src/workflows/pr-review/risk.js";
 import { parseReviewTarget } from "../src/workflows/pr-review/target.js";
@@ -220,19 +223,21 @@ test("adversarial pass receives the primary result and becomes the final review"
         return { exitCode: 0, stdout: JSON.stringify(adversarial), stderr: "" };
       },
     };
+    const client = new FakeReviewClient();
     const result = await new PullRequestReviewWorkflow().run({
       config: makeConfig(root),
-      client: new FakeReviewClient(),
+      client,
       agent: new FakeAgent(primary),
       adversarialAgent,
       adversarialMode: "always",
       target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
-      post: false,
+      post: true,
       cloneUrlOverride: remote,
     });
 
     assert.equal(result.adversarialRan, true);
     assert.equal(result.review.summary, adversarial.summary);
+    assert.equal(client.postedReviews.length, 1);
     assert.match(adversarialPrompt, /Primary review JSON:/);
     assert.match(adversarialPrompt, /Primary finding/);
   } finally {
@@ -390,6 +395,7 @@ test("post mode keeps valid diff findings while skipping invalid ones", async ()
         findings: [
           { path: "README.md", line: 1, body: "Valid diff finding.", severity: "medium" },
           { path: "README.md", line: 99, body: "Invalid diff finding.", severity: "medium" },
+          { path: "missing.ts", line: 1, body: "Missing file finding.", severity: "low" },
         ],
       }),
       target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
@@ -398,7 +404,7 @@ test("post mode keeps valid diff findings while skipping invalid ones", async ()
     });
 
     assert.equal(result.newFindings.length, 1);
-    assert.equal(result.skippedUnpostableFindings, 1);
+    assert.equal(result.skippedUnpostableFindings, 2);
     assert.equal(client.postedReviews.length, 1);
     assert.equal(client.postedReviews[0].comments.length, 1);
     assert.equal(client.postedReviews[0].comments[0].line, 1);
@@ -475,6 +481,110 @@ test("draft PR review fails before running agent or posting", async () => {
     );
     assert.equal(agentRan, false);
     assert.equal(client.postedReviews.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("review parser rejects each malformed result field and normalizes valid strings", () => {
+  const invalid: Array<[unknown, RegExp]> = [
+    ["", /no output/],
+    ["null", /JSON object/],
+    ["[]", /JSON object/],
+    ["1", /JSON object/],
+    [JSON.stringify({ summary: 1, findings: [] }), /summary must be a string/],
+    [JSON.stringify({ summary: "x", findings: {} }), /findings must be an array/],
+    [JSON.stringify({ summary: "x", findings: [null] }), /must be an object/],
+    [JSON.stringify({ summary: "x", findings: [{ path: 1, line: 1, body: "x", severity: "low" }] }), /path/],
+    [JSON.stringify({ summary: "x", findings: [{ path: " ", line: 1, body: "x", severity: "low" }] }), /path/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: "1", body: "x", severity: "low" }] }), /line/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 1.5, body: "x", severity: "low" }] }), /line/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 0, body: "x", severity: "low" }] }), /line/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 1, body: 1, severity: "low" }] }), /body/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 1, body: " ", severity: "low" }] }), /body/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 1, body: "x", severity: 1 }] }), /severity/],
+    [JSON.stringify({ summary: "x", findings: [{ path: "a", line: 1, body: "x", severity: "urgent" }] }), /severity/],
+  ];
+  for (const [value, expected] of invalid) {
+    assert.throws(() => parseReviewResult(String(value)), expected);
+  }
+  assert.deepEqual(parseReviewResult(JSON.stringify({
+    summary: "ok",
+    findings: [{ path: " a.ts ", line: 1, body: " fix me ", severity: "critical" }],
+  })).findings[0], { path: "a.ts", line: 1, body: "fix me", severity: "critical" });
+});
+
+test("review prompt handles missing descriptions/patches and enforces adversarial inputs", () => {
+  const context = makeContext();
+  context.body = null;
+  context.files[0].patch = null;
+  const prompt = buildReviewPrompt(context);
+  assert.doesNotMatch(prompt, /PR description/);
+  assert.match(prompt, /Patch: unavailable/);
+  assert.throws(() => buildReviewPrompt(context, { role: "adversarial" }), /requires the primary review/);
+});
+
+test("risk policy covers explicit modes and all automatic risk signals", () => {
+  assert.deepEqual(decideAdversarialReview("off", makeContext(), { summary: "", findings: [] }), { run: false, reasons: ["disabled"] });
+  assert.deepEqual(decideAdversarialReview("always", makeContext(), { summary: "", findings: [] }), { run: true, reasons: ["configured-always"] });
+  const context = makeContext();
+  context.files = Array.from({ length: 12 }, (_, index) => ({
+    path: index === 0 ? "security/auth.ts" : `src/file-${index}.ts`,
+    status: "modified",
+    additions: 40,
+    deletions: 0,
+    patch: index === 1 ? null : "patch",
+  }));
+  const decision = decideAdversarialReview("auto", context, {
+    summary: "critical",
+    findings: [{ path: "security/auth.ts", line: 1, body: "critical", severity: "critical" }],
+  });
+  assert.deepEqual(decision.reasons, ["many-files:12", "large-diff:480", "sensitive-path", "missing-patch", "high-severity-primary-finding"]);
+});
+
+test("right-side patch parsing tracks context/additions and ignores metadata/deletions", () => {
+  assert.deepEqual([...parseRightSidePatchLines(null)], []);
+  assert.deepEqual([...parseRightSidePatchLines([
+    "metadata before hunk",
+    "@@ -1,2 +10,4 @@ heading",
+    " context",
+    "-deleted",
+    "+added",
+    "\\ No newline at end of file",
+    "unexpected metadata",
+    "+after metadata",
+  ].join("\n"))], [10, 11, 13]);
+});
+
+test("review workflow reports missing adversarial adapters, agent failures, and malformed output", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-errors-"));
+  try {
+    const remote = createBareRemote(root);
+    const base = {
+      config: makeConfig(root),
+      client: new FakeReviewClient(),
+      target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
+      post: false,
+      cloneUrlOverride: remote,
+    };
+    const missing = await new PullRequestReviewWorkflow().run({
+      ...base,
+      agent: new FakeAgent({ summary: "ok", findings: [] }),
+      adversarialMode: "always",
+    });
+    assert.equal(missing.adversarialRan, false);
+    assert.deepEqual(missing.adversarialReasons, ["configured-always"]);
+
+    await assert.rejects(() => new PullRequestReviewWorkflow().run({
+      ...base,
+      agent: new FakeAgent({ summary: "bad", findings: [] }, { exitCode: 7 }),
+    }), /Primary review agent exited 7/);
+
+    const malformed: AgentAdapter = {
+      name: "malformed",
+      async run() { return { exitCode: 0, stdout: "not-json", stderr: "parse details" }; },
+    };
+    await assert.rejects(() => new PullRequestReviewWorkflow().run({ ...base, agent: malformed }), /Failed to parse primary review agent output/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

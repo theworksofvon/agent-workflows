@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Enforce Complete Runtime Coverage
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Turn the baseline test suite into comprehensive, coverage-gated CI without calling live GitHub or model services.
+Message: GitHub Actions now enforces strict source and test typechecking, a compiled CLI smoke test, Python orchestrator tests, and exact 100% line, branch, and function coverage for executable production TypeScript.
+Added/Changed: Expanded the Node suite from 24 to 58 tests across configuration, queues, persistence, daemon lifecycle, CLI routing, GitHub normalization, comment workflows, review workflows, adapters, and real temporary Git worktrees; added narrow typed injection seams and cross-platform path checks.
+Fixed/Removed: Prevents duplicate daemon timer chains after stop/restart, rejects unsafe managed-worktree paths on POSIX and Windows path flavors, removes coverage-only runtime constants, and replaces unsafe fake-Octokit casts with a structural API contract.
+Handoff: Verified with production and test typechecks, the production build, script checks, exact coverage thresholds, compiled CLI smoke tests, five Python tests, doctor, diff validation, and independent post-repair review.
+
 ### Gate Comment Runs And Compile Production
 
 Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.

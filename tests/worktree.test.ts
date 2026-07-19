@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join, win32 } from "node:path";
 import { tmpdir } from "node:os";
-import { cleanupWorkdir, prepareWorkdir } from "../src/runner/workdir.js";
+import {
+  assertInsideManagedRoot,
+  cleanupWorkdir,
+  prepareWorkdir,
+  resolveCloneUrl,
+} from "../src/runner/workdir.js";
 import {
   commitUncommittedChanges,
   commitsAhead,
@@ -48,6 +53,7 @@ test("prepareWorkdir uses a cached repo worktree and cleanup removes it", () => 
     assert.equal(existsSync(join(handle.repoCachePath, "HEAD")), true);
     assert.equal(existsSync(join(handle.path, "README.md")), true);
     assert.match(handle.baseSha, /^[0-9a-f]{40}$/);
+    assert.equal(commitsAhead(handle.path, "main"), 0);
 
     writeFileSync(join(handle.path, "agent-output.txt"), "done\n");
     assert.equal(hasUncommittedChanges(handle.path), true);
@@ -107,6 +113,105 @@ test("pushBranch rejects when the remote branch moved after worktree creation", 
     );
 
     cleanupWorkdir(handle, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workdir helpers sanitize tasks, retain requested worktrees, and clean up fallback paths", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-worktree-branches-"));
+  try {
+    const remote = createBareRemote(root);
+    const handle = prepareWorkdir({
+      stateDir: join(root, "state"),
+      repo: { owner: "local owner", repo: "sample/repo" },
+      branch: "main",
+      taskId: "",
+      token: "unused",
+      cloneUrlOverride: remote,
+    });
+    assert.match(handle.localBranch, /^agent-workflows\/task-/);
+    cleanupWorkdir(handle, true);
+    assert.equal(existsSync(handle.path), true);
+    cleanupWorkdir(handle, false);
+    cleanupWorkdir(handle, false);
+    assert.equal(existsSync(handle.path), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepareWorkdir wraps checkout failures and removes partial directories", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-worktree-failure-"));
+  try {
+    const remote = createBareRemote(root);
+    assert.throws(() => prepareWorkdir({
+      stateDir: join(root, "state"),
+      repo: { owner: "owner", repo: "repo" },
+      branch: "missing-branch",
+      taskId: "failure",
+      token: "unused",
+      cloneUrlOverride: remote,
+    }), /Failed to prepare worktree/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("managed path and clone URL helpers reject broad targets without external access", () => {
+  const temp = mkdtempSync(join(tmpdir(), "agent-workflows-containment-"));
+  try {
+    const stateRoot = join(temp, "state");
+    const managedRoot = join(stateRoot, "worktrees");
+    const sibling = join(stateRoot, "worktrees-sibling");
+    const outside = join(temp, "outside");
+    for (const path of [managedRoot, sibling, outside]) {
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "marker"), "must survive");
+    }
+
+    assert.doesNotThrow(() => assertInsideManagedRoot(join(managedRoot, "child"), managedRoot));
+    for (const path of [managedRoot, sibling, outside]) {
+      assert.throws(() => assertInsideManagedRoot(path, managedRoot), /Refusing to operate/);
+      assert.equal(existsSync(path), true);
+    }
+
+    const windowsRoot = "C:\\state\\worktrees";
+    assert.doesNotThrow(() => assertInsideManagedRoot("C:\\state\\worktrees\\child", windowsRoot, win32));
+    for (const path of [windowsRoot, "C:\\state\\worktrees-sibling", "D:\\outside"]) {
+      assert.throws(() => assertInsideManagedRoot(path, windowsRoot, win32), /Refusing to operate/);
+    }
+
+    const repoCachePath = join(stateRoot, "repos", "owner", "repo.git");
+    for (const path of [managedRoot, sibling, outside]) {
+      assert.throws(() => cleanupWorkdir({
+        path,
+        branch: "main",
+        localBranch: "local",
+        baseSha: "abc",
+        repoCachePath,
+      }, false), /Refusing to operate/);
+      assert.equal(existsSync(path), true);
+    }
+
+    assert.equal(resolveCloneUrl({ owner: "o", repo: "r" }, "secret"), "https://x-access-token:secret@github.com/o/r");
+    assert.equal(resolveCloneUrl({ owner: "o", repo: "r" }, "secret", "/local/repo"), "/local/repo");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("commitsAhead falls back to worktree status when the origin branch is absent", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-ahead-fallback-"));
+  try {
+    git(["init", "-b", "main", root], tmpdir());
+    git(["config", "user.name", "Test"], root);
+    git(["config", "user.email", "test@example.com"], root);
+    assert.equal(commitsAhead(root, "missing"), 0);
+    writeFileSync(join(root, "dirty.txt"), "dirty\n");
+    assert.equal(commitsAhead(root, "missing"), 1);
+    assert.equal(commitUncommittedChanges(root, "commit dirty"), true);
+    assert.equal(commitUncommittedChanges(root, "nothing"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

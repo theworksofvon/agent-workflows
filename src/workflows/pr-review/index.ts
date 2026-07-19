@@ -227,7 +227,7 @@ function filterPostableFindings(
   return findings.filter((finding) => postableLines.get(finding.path)?.has(finding.line) ?? false);
 }
 
-function parseRightSidePatchLines(patch: string | null): Set<number> {
+export function parseRightSidePatchLines(patch: string | null): Set<number> {
   const lines = new Set<number>();
   if (!patch) return lines;
 

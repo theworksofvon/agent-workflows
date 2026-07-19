@@ -46,6 +46,11 @@ export interface PRCommentPayload {
   comments: PRCommentItem[];
 }
 
+export type GitHubPollingClient = Pick<
+  GitHubClient,
+  "listOpenPRs" | "listIssueComments" | "listReviewComments"
+>;
+
 /**
  * Polls configured repos for new PR comments (both conversation and inline
  * review comments). Owns per-PR cursors in repo-scoped state. Filters out the
@@ -53,8 +58,8 @@ export interface PRCommentPayload {
  */
 export function githubPoller(args: {
   config: Config;
-  client: GitHubClient;
-}): Source {
+  client: GitHubPollingClient;
+}): Source<PRCommentPayload> {
   const { config, client } = args;
 
   /** True if a comment was authored by this daemon or tagged as its output. */
@@ -72,8 +77,8 @@ export function githubPoller(args: {
     return `${repo.owner}/${repo.repo}#${prNumber}:${kind}:${id}`;
   }
 
-  async function pollRepo(repo: RepoSpec): Promise<Event[]> {
-    const events: Event[] = [];
+  async function pollRepo(repo: RepoSpec): Promise<Array<Event<PRCommentPayload>>> {
+    const events: Array<Event<PRCommentPayload>> = [];
     const now = Date.now();
     const state = GitHubRepoStateStore.fromConfig(config, repo);
     const firstPoll = !state.isPollingInitialized();
@@ -165,7 +170,7 @@ export function githubPoller(args: {
   return {
     name: "github-pr-comments",
     async poll() {
-      const all: Event[] = [];
+      const all: Array<Event<PRCommentPayload>> = [];
       for (const repo of config.repos) {
         try {
           const events = await pollRepo(repo);

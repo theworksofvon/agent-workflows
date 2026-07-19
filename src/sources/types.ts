@@ -5,18 +5,18 @@
  * A source just needs to produce events on demand.
  */
 
-export interface Event {
+export interface Event<Payload = unknown> {
   /** Event kind, matched against Workflow.kind. e.g. "pr_comment". */
   kind: string;
   /** Opaque payload; the matching workflow knows its shape. */
-  payload: unknown;
+  payload: Payload;
   /** Stable id for dedup/logging. */
   id: string;
 }
 
-export interface Source {
+export interface Source<Payload = unknown> {
   /** Human-readable name for logs. */
   readonly name: string;
   /** Return events seen since the last poll. Sources own their own cursor. */
-  poll(): Promise<Event[]>;
+  poll(): Promise<Array<Event<Payload>>>;
 }

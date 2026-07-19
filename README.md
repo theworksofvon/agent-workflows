@@ -91,7 +91,11 @@ service manager if it must survive terminal exits or machine restarts.
 | `npm run review -- owner/repo#123` | Review a PR locally without posting or changing files. |
 | `npm run review -- owner/repo#123 --post` | Post new actionable findings as one grouped review. |
 | `npm run skills:install` | Refresh Codex, Claude, and Cursor links after adding a skill. |
-| `npm run typecheck && npm run check:scripts && npm test` | Run the no-token baseline checks. |
+| `npm test` | Run Node tests with exact 100% line, branch, and function coverage for `src/**/*.ts`. |
+| `npm run test:smoke` | Exercise compiled CLI help routes without credentials or network access. |
+| `npm run test:python` | Run the Python model-orchestrator test suite. |
+| `npm run test:typecheck` | Strictly typecheck the TypeScript test suite. |
+| `npm run typecheck && npm run test:typecheck && npm run build && npm run check:scripts && npm test && npm run test:smoke && npm run test:python` | Run the authoritative no-token verification suite. |
 
 Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 `--no-adversarial` to override the configured review policy. See
@@ -204,13 +208,22 @@ Retention, retry, and binary override settings are documented in
 ```bash
 npm ci
 npm run typecheck
+npm run test:typecheck
 npm run build
 npm run check:scripts
 npm test
+npm run test:smoke
+npm run test:python
+npm run doctor
 ```
 
-GitHub Actions runs the same checks on pull requests and pushes to `main` using
-Node 24.
+These are the authoritative local verification commands. `npm test` positively
+includes every production TypeScript file under `src/` and fails below 100% for
+lines, branches, or functions. The smoke suite runs only compiled help paths, so
+it needs no token, repository configuration, or agent binary. GitHub Actions
+runs the deterministic production and test typechecks, build, script, Node, smoke, and Python checks
+on pull requests and pushes to `main` using Node 24 and Python 3.11. `doctor`
+remains the machine-specific check for local credentials, binaries, and links.
 
 The extension seams are intentionally small:
 

@@ -1,52 +1,92 @@
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
-import type { ReviewAdversarialMode } from "./config.js";
+import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./github/client.js";
 import { githubPoller } from "./github/poller.js";
 import { getAgent } from "./agents/registry.js";
+import type { AgentAdapter } from "./agents/types.js";
 import { registerBuiltins } from "./workflows/registry.js";
 import { Daemon } from "./daemon.js";
 import { log } from "./log.js";
 import { parseReviewTarget } from "./workflows/pr-review/target.js";
 import { PullRequestReviewWorkflow } from "./workflows/pr-review/index.js";
-import type { PullRequestReviewRunResult } from "./workflows/pr-review/index.js";
+import type {
+  PullRequestReviewRunResult,
+  RunPullRequestReviewOptions,
+} from "./workflows/pr-review/index.js";
+import type { Source } from "./sources/types.js";
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+export interface CliDependencies {
+  loadConfig(options: { requireRepos: boolean }): Config;
+  createClient(token: string): GitHubClient;
+  getAgent(name: string, config: Config): AgentAdapter;
+  registerBuiltins(): void;
+  createPoller(args: { config: Config; client: GitHubClient }): Source;
+  createDaemon(args: {
+    config: Config;
+    source: Source;
+    client: GitHubClient;
+    agent: AgentAdapter;
+  }): Pick<Daemon, "start" | "stop">;
+  createReviewWorkflow(): Pick<PullRequestReviewWorkflow, "run">;
+  onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  exit(code: number): void;
+  writeLine(line: string): void;
+}
+
+export const defaultCliDependencies: CliDependencies = {
+  loadConfig,
+  createClient: (token) => new GitHubClient(token),
+  getAgent,
+  registerBuiltins,
+  createPoller: githubPoller,
+  createDaemon: ({ config, source, client, agent }) =>
+    new Daemon(config, source, client, agent),
+  createReviewWorkflow: () => new PullRequestReviewWorkflow(),
+  onSignal: process.on.bind(process),
+  exit: process.exit.bind(process),
+  writeLine: console.log,
+};
+
+export async function runCli(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
   if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
-    printHelp();
+    printHelp(dependencies.writeLine);
     return;
   }
   if (args[0] === "review") {
     if (args[1] === "--help" || args[1] === "-h" || args[1] === "help") {
-      printHelp();
+      printHelp(dependencies.writeLine);
       return;
     }
-    await runReviewCommand(args.slice(1));
+    await runReviewCommand(args.slice(1), dependencies);
     return;
   }
 
-  const config = loadConfig({ requireRepos: true });
-  const client = new GitHubClient(config.githubToken);
-  const agent = getAgent(config.agent, config);
+  const config = dependencies.loadConfig({ requireRepos: true });
+  const client = dependencies.createClient(config.githubToken);
+  const agent = dependencies.getAgent(config.agent, config);
+  dependencies.registerBuiltins();
 
-  registerBuiltins();
+  const source = dependencies.createPoller({ config, client });
+  const daemon = dependencies.createDaemon({ config, source, client, agent });
 
-  const source = githubPoller({ config, client });
-  const daemon = new Daemon(config, source, client, agent);
-
-  // Graceful shutdown.
-  const stop = (sig: string) => {
+  const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });
-    process.exit(0);
+    daemon.stop();
+    dependencies.exit(0);
   };
-  process.on("SIGINT", () => stop("SIGINT"));
-  process.on("SIGTERM", () => stop("SIGTERM"));
+  dependencies.onSignal("SIGINT", () => stop("SIGINT"));
+  dependencies.onSignal("SIGTERM", () => stop("SIGTERM"));
 
   await daemon.start();
 }
 
-function printHelp(): void {
-  console.log(`agent-workflows
+export function printHelp(writeLine: (line: string) => void = console.log): void {
+  writeLine(`agent-workflows
 
 Usage:
   npm start
@@ -58,7 +98,10 @@ Commands:
   help     Show this message`);
 }
 
-async function runReviewCommand(args: string[]): Promise<void> {
+export async function runReviewCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
   const targetArgs = args.filter((arg) => !arg.startsWith("--"));
   const targetArg = targetArgs[0];
   const post = args.includes("--post");
@@ -84,9 +127,9 @@ async function runReviewCommand(args: string[]): Promise<void> {
     throw new Error("Use either --adversarial or --no-adversarial, not both.");
   }
 
-  const config = loadConfig({ requireRepos: false });
-  const client = new GitHubClient(config.githubToken);
-  const agent = getAgent(config.agent, config);
+  const config = dependencies.loadConfig({ requireRepos: false });
+  const client = dependencies.createClient(config.githubToken);
+  const agent = dependencies.getAgent(config.agent, config);
   const adversarialMode: ReviewAdversarialMode = forceAdversarial
     ? "always"
     : skipAdversarial
@@ -94,8 +137,8 @@ async function runReviewCommand(args: string[]): Promise<void> {
       : config.reviewAdversarialMode;
   const adversarialAgent = adversarialMode === "off"
     ? undefined
-    : getAgent(config.reviewAdversarialAgent, config);
-  const workflow = new PullRequestReviewWorkflow();
+    : dependencies.getAgent(config.reviewAdversarialAgent, config);
+  const workflow = dependencies.createReviewWorkflow();
   const result = await workflow.run({
     config,
     client,
@@ -104,36 +147,52 @@ async function runReviewCommand(args: string[]): Promise<void> {
     adversarialMode,
     target: parseReviewTarget(targetArg),
     post,
-  });
-  printReviewResult(result);
+  } satisfies RunPullRequestReviewOptions);
+  printReviewResult(result, dependencies.writeLine);
 }
 
-function printReviewResult(result: PullRequestReviewRunResult): void {
+export function printReviewResult(
+  result: PullRequestReviewRunResult,
+  writeLine: (line: string) => void = console.log,
+): void {
   const slug = `${result.target.repo.owner}/${result.target.repo.repo}#${result.target.prNumber}`;
   const mode = result.dryRun ? "dry-run" : "posted";
-  console.log(`Review ${mode} for ${slug}`);
-  console.log(result.review.summary);
-  console.log(
+  writeLine(`Review ${mode} for ${slug}`);
+  writeLine(result.review.summary);
+  writeLine(
     result.adversarialRan
       ? `Adversarial review: ran (${result.adversarialReasons.join(", ")})`
       : `Adversarial review: skipped (${result.adversarialReasons.join(", ")})`,
   );
   if (result.skippedDuplicateFindings > 0) {
-    console.log(`Skipped duplicate findings: ${result.skippedDuplicateFindings}`);
+    writeLine(`Skipped duplicate findings: ${result.skippedDuplicateFindings}`);
   }
   if (result.skippedUnpostableFindings > 0) {
-    console.log(`Skipped unpostable findings: ${result.skippedUnpostableFindings}`);
+    writeLine(`Skipped unpostable findings: ${result.skippedUnpostableFindings}`);
   }
   if (result.newFindings.length === 0) {
-    console.log("No new actionable findings.");
+    writeLine("No new actionable findings.");
     return;
   }
   for (const finding of result.newFindings) {
-    console.log(`- ${finding.path}:${finding.line} [${finding.severity}] ${finding.body}`);
+    writeLine(`- ${finding.path}:${finding.line} [${finding.severity}] ${finding.body}`);
   }
 }
 
-main().catch((err) => {
-  log.error("fatal startup error", { error: err instanceof Error ? err.stack : String(err) });
-  process.exit(1);
-});
+export async function runEntryPoint(
+  moduleUrl: string,
+  argv: string[] = process.argv,
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<boolean> {
+  const script = argv[1];
+  if (!script || pathToFileURL(resolve(script)).href !== moduleUrl) return false;
+  try {
+    await runCli(argv.slice(2), dependencies);
+  } catch (err) {
+    log.error("fatal startup error", { error: err instanceof Error ? err.stack : String(err) });
+    dependencies.exit(1);
+  }
+  return true;
+}
+
+void runEntryPoint(import.meta.url);
