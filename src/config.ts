@@ -7,6 +7,8 @@ export interface RepoSpec {
   repo: string;
 }
 
+export type ReviewAdversarialMode = "off" | "auto" | "always";
+
 export interface Config {
   githubToken: string;
   repos: RepoSpec[];
@@ -18,6 +20,8 @@ export interface Config {
   agentRetryDelaySec: number;
   agentMaxAttempts: number;
   agent: string;
+  reviewAdversarialMode: ReviewAdversarialMode;
+  reviewAdversarialAgent: string;
   agentSelfUser: string | null;
   stateDir: string;
   zcodeBin: string;
@@ -62,6 +66,11 @@ function parseRepos(raw: string): RepoSpec[] {
 export function loadConfig(options: LoadConfigOptions = {}): Config {
   const requireRepos = options.requireRepos ?? true;
   const rawRepos = process.env.REPOS?.trim() ?? "";
+  const agent = optional("AGENT", "zcode");
+  const reviewAdversarialMode = optional("REVIEW_ADVERSARIAL_MODE", "auto");
+  if (!isReviewAdversarialMode(reviewAdversarialMode)) {
+    throw new Error("REVIEW_ADVERSARIAL_MODE must be one of: off, auto, always.");
+  }
   const cfg: Config = {
     githubToken: required("GITHUB_TOKEN"),
     repos: rawRepos === "" ? [] : parseRepos(rawRepos),
@@ -72,7 +81,9 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
     agentRetryDelaySec: Number(optional("AGENT_RETRY_DELAY_SEC", "1800")),
     agentMaxAttempts: Number(optional("AGENT_MAX_ATTEMPTS", "5")),
-    agent: optional("AGENT", "zcode"),
+    agent,
+    reviewAdversarialMode,
+    reviewAdversarialAgent: optional("REVIEW_ADVERSARIAL_AGENT", agent),
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
@@ -109,6 +120,8 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   log.info("config loaded", {
     repos: cfg.repos.map((r) => `${r.owner}/${r.repo}`),
     agent: cfg.agent,
+    reviewAdversarialMode: cfg.reviewAdversarialMode,
+    reviewAdversarialAgent: cfg.reviewAdversarialAgent,
     pollIntervalSec: cfg.pollIntervalSec,
     commentBatchWindowSec: cfg.commentBatchWindowSec,
     prContextHistoryLimit: cfg.prContextHistoryLimit,
@@ -117,4 +130,8 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     stateDir: cfg.stateDir,
   });
   return cfg;
+}
+
+function isReviewAdversarialMode(value: string): value is ReviewAdversarialMode {
+  return value === "off" || value === "auto" || value === "always";
 }

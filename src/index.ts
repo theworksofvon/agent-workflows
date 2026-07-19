@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.js";
+import type { ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./github/client.js";
 import { githubPoller } from "./github/poller.js";
 import { getAgent } from "./agents/registry.js";
@@ -41,7 +42,10 @@ async function runReviewCommand(args: string[]): Promise<void> {
   const targetArg = targetArgs[0];
   const post = args.includes("--post");
   const dryRun = args.includes("--dry-run");
-  const unknownFlags = args.filter((arg) => arg.startsWith("--") && arg !== "--post" && arg !== "--dry-run");
+  const forceAdversarial = args.includes("--adversarial");
+  const skipAdversarial = args.includes("--no-adversarial");
+  const knownFlags = new Set(["--post", "--dry-run", "--adversarial", "--no-adversarial"]);
+  const unknownFlags = args.filter((arg) => arg.startsWith("--") && !knownFlags.has(arg));
 
   if (unknownFlags.length > 0) {
     throw new Error(`Unknown review option(s): ${unknownFlags.join(", ")}`);
@@ -55,15 +59,28 @@ async function runReviewCommand(args: string[]): Promise<void> {
   if (post && dryRun) {
     throw new Error("Use either --post or --dry-run, not both.");
   }
+  if (forceAdversarial && skipAdversarial) {
+    throw new Error("Use either --adversarial or --no-adversarial, not both.");
+  }
 
   const config = loadConfig({ requireRepos: false });
   const client = new GitHubClient(config.githubToken);
   const agent = getAgent(config.agent, config);
+  const adversarialMode: ReviewAdversarialMode = forceAdversarial
+    ? "always"
+    : skipAdversarial
+      ? "off"
+      : config.reviewAdversarialMode;
+  const adversarialAgent = adversarialMode === "off"
+    ? undefined
+    : getAgent(config.reviewAdversarialAgent, config);
   const workflow = new PullRequestReviewWorkflow();
   const result = await workflow.run({
     config,
     client,
     agent,
+    adversarialAgent,
+    adversarialMode,
     target: parseReviewTarget(targetArg),
     post,
   });
@@ -75,6 +92,11 @@ function printReviewResult(result: PullRequestReviewRunResult): void {
   const mode = result.dryRun ? "dry-run" : "posted";
   console.log(`Review ${mode} for ${slug}`);
   console.log(result.review.summary);
+  console.log(
+    result.adversarialRan
+      ? `Adversarial review: ran (${result.adversarialReasons.join(", ")})`
+      : `Adversarial review: skipped (${result.adversarialReasons.join(", ")})`,
+  );
   if (result.skippedDuplicateFindings > 0) {
     console.log(`Skipped duplicate findings: ${result.skippedDuplicateFindings}`);
   }

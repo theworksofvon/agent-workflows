@@ -37,6 +37,8 @@ npm run review -- https://github.com/owner/repo/pull/123 --post
 
 Review mode runs in an isolated worktree, asks for actionable PR findings only, and never commits or pushes. It dry-runs by default; pass `--post` to submit one grouped GitHub review.
 
+The review policy lives in `skills/pr-reviewer` and is embedded into every adapter prompt. An optional adversarial pass independently verifies the primary result; `auto` mode reserves that second call for riskier changes.
+
 See [docs/pr-review-mode.md](docs/pr-review-mode.md) for the short usage guide.
 
 ## Testing
@@ -73,6 +75,8 @@ All via environment (`.env`):
 | `AGENT_RETRY_DELAY_SEC` | no | `1800` | seconds to pause retryable agent failures before trying again |
 | `AGENT_MAX_ATTEMPTS` | no | `5` | maximum attempts for a retryable comment batch |
 | `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
+| `REVIEW_ADVERSARIAL_MODE` | no | `auto` | second review pass: `off` \| `auto` \| `always` |
+| `REVIEW_ADVERSARIAL_AGENT` | no | same as `AGENT` | adapter used for the independent adversarial pass |
 | `STATE_DIR` | no | `./state` | where repo state files, cached bare repos, and worktrees live (gitignored) |
 | `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
 | `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |

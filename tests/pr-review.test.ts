@@ -10,6 +10,7 @@ import { GitHubRepoStateStore } from "../src/github/state.js";
 import { buildReviewPrompt } from "../src/workflows/pr-review/context.js";
 import { PullRequestReviewWorkflow } from "../src/workflows/pr-review/index.js";
 import { findingFingerprint, parseReviewResult } from "../src/workflows/pr-review/parser.js";
+import { decideAdversarialReview } from "../src/workflows/pr-review/risk.js";
 import { parseReviewTarget } from "../src/workflows/pr-review/target.js";
 import type { PullRequestReviewContext, ReviewResult } from "../src/workflows/pr-review/types.js";
 
@@ -42,6 +43,8 @@ function makeConfig(root: string): Config {
     agentRetryDelaySec: 1800,
     agentMaxAttempts: 5,
     agent: "fake",
+    reviewAdversarialMode: "off",
+    reviewAdversarialAgent: "fake",
     agentSelfUser: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",
@@ -157,11 +160,81 @@ test("parseReviewTarget handles owner/repo slug and GitHub PR URL", () => {
 
 test("buildReviewPrompt includes read-only review contract and changed file context", () => {
   const prompt = buildReviewPrompt(makeContext());
-  assert.match(prompt, /review-only work/);
+  assert.match(prompt, /review-only engineer/);
   assert.match(prompt, /do not edit files, commit, push/);
   assert.match(prompt, /src\/example\.ts/);
   assert.match(prompt, /Return JSON only/);
   assert.match(prompt, /critical\|high\|medium\|low/);
+  assert.match(prompt, /embedded \$pr-reviewer skill contract/);
+});
+
+test("auto adversarial review is gated by deterministic risk signals", () => {
+  const lowRisk = decideAdversarialReview("auto", makeContext(), {
+    summary: "No issues",
+    findings: [],
+  });
+  assert.equal(lowRisk.run, false);
+  assert.deepEqual(lowRisk.reasons, ["low-risk"]);
+
+  const highRisk = decideAdversarialReview("auto", makeContext(), {
+    summary: "One serious issue",
+    findings: [
+      { path: "src/example.ts", line: 2, body: "This bypasses authorization.", severity: "high" },
+    ],
+  });
+  assert.equal(highRisk.run, true);
+  assert.match(highRisk.reasons.join(","), /high-severity-primary-finding/);
+});
+
+test("adversarial prompt omits duplicated patches and marks primary output untrusted", () => {
+  const prompt = buildReviewPrompt(makeContext(), {
+    role: "adversarial",
+    primaryReview: { summary: "Primary", findings: [] },
+    includePatches: false,
+  });
+  assert.doesNotMatch(prompt, /@@ -1,2 \+1,3 @@/);
+  assert.match(prompt, /Patch omitted to reduce prompt cost/);
+  assert.match(prompt, /untrusted hypotheses/);
+});
+
+test("adversarial pass receives the primary result and becomes the final review", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-adversarial-"));
+  try {
+    const remote = createBareRemote(root);
+    const primary: ReviewResult = {
+      summary: "Primary",
+      findings: [{ path: "README.md", line: 1, body: "Primary finding.", severity: "medium" }],
+    };
+    const adversarial: ReviewResult = {
+      summary: "Adversarial verified review",
+      findings: [{ path: "README.md", line: 1, body: "Verified finding.", severity: "high" }],
+    };
+    let adversarialPrompt = "";
+    const adversarialAgent: AgentAdapter = {
+      name: "adversarial-fake",
+      async run(input): Promise<AgentRunResult> {
+        adversarialPrompt = input.prompt;
+        return { exitCode: 0, stdout: JSON.stringify(adversarial), stderr: "" };
+      },
+    };
+    const result = await new PullRequestReviewWorkflow().run({
+      config: makeConfig(root),
+      client: new FakeReviewClient(),
+      agent: new FakeAgent(primary),
+      adversarialAgent,
+      adversarialMode: "always",
+      target: { repo: { owner: "local-owner", repo: "sample-repo" }, prNumber: 1 },
+      post: false,
+      cloneUrlOverride: remote,
+    });
+
+    assert.equal(result.adversarialRan, true);
+    assert.equal(result.review.summary, adversarial.summary);
+    assert.match(adversarialPrompt, /Primary review JSON:/);
+    assert.match(adversarialPrompt, /Primary finding/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("parseReviewResult accepts valid JSON and rejects malformed findings", () => {

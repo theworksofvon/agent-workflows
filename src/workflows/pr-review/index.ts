@@ -1,5 +1,6 @@
 import type { AgentAdapter } from "../../agents/types.js";
 import type { Config } from "../../config.js";
+import type { ReviewAdversarialMode } from "../../config.js";
 import type { GitHubClient } from "../../github/client.js";
 import { MARKER_TAG } from "../../github/client.js";
 import { GitHubRepoStateStore } from "../../github/state.js";
@@ -9,6 +10,7 @@ import { cleanupWorkdir, prepareWorkdir } from "../../runner/workdir.js";
 import { hasUncommittedChanges } from "../pr-comment/push.js";
 import { buildReviewPrompt } from "./context.js";
 import { findingFingerprint, parseReviewResult } from "./parser.js";
+import { decideAdversarialReview } from "./risk.js";
 import type {
   PRReviewTarget,
   PullRequestReviewContext,
@@ -25,6 +27,8 @@ export interface RunPullRequestReviewOptions {
   config: Config;
   client: ReviewGitHubClient;
   agent: AgentAdapter;
+  adversarialAgent?: AgentAdapter;
+  adversarialMode?: ReviewAdversarialMode;
   target: PRReviewTarget;
   post: boolean;
   cloneUrlOverride?: string;
@@ -37,6 +41,8 @@ export interface PullRequestReviewRunResult {
   newFindings: ReviewFinding[];
   skippedDuplicateFindings: number;
   skippedUnpostableFindings: number;
+  adversarialRan: boolean;
+  adversarialReasons: string[];
 }
 
 export class PullRequestReviewWorkflow {
@@ -71,29 +77,38 @@ export class PullRequestReviewWorkflow {
     });
 
     try {
-      const agentResult = await runAgent(agent, {
+      const primaryReview = await runReviewAgent({
+        agent,
         workdir: workdir.path,
         branch: pr.headRef,
         prompt: buildReviewPrompt(reviewContext),
+        label: "Primary review",
       });
-      if (agentResult.exitCode !== 0) {
-        throw new Error(
-          `Review agent exited ${agentResult.exitCode}. stderr tail: ${agentResult.stderr.slice(-1000)} stdout tail: ${agentResult.stdout.slice(-1000)}`,
-        );
+      const adversarialDecision = decideAdversarialReview(
+        options.adversarialMode ?? config.reviewAdversarialMode,
+        reviewContext,
+        primaryReview,
+      );
+      const adversarialRan = adversarialDecision.run && options.adversarialAgent !== undefined;
+      if (adversarialDecision.run && !options.adversarialAgent) {
+        log.warn("adversarial review requested but no adversarial agent was provided", {
+          slug,
+          reasons: adversarialDecision.reasons,
+        });
       }
-
-      if (hasUncommittedChanges(workdir.path)) {
-        throw new Error("Review agent modified files during review-only mode; refusing to post.");
-      }
-
-      let review: ReviewResult;
-      try {
-        review = parseReviewResult(agentResult.stdout);
-      } catch (err) {
-        throw new Error(
-          `Failed to parse review agent output: ${String(err)}. stderr tail: ${agentResult.stderr.slice(-1000)} stdout tail: ${agentResult.stdout.slice(-1000)}`,
-        );
-      }
+      const review = adversarialRan
+        ? await runReviewAgent({
+            agent: options.adversarialAgent!,
+            workdir: workdir.path,
+            branch: pr.headRef,
+            prompt: buildReviewPrompt(reviewContext, {
+              role: "adversarial",
+              primaryReview,
+              includePatches: false,
+            }),
+            label: "Adversarial review",
+          })
+        : primaryReview;
       const repoState = GitHubRepoStateStore.fromConfig(config, target.repo);
       const postedKeys = new Set(repoState.getPostedReviewFindingKeys(target.prNumber));
       const newFindings = review.findings.filter(
@@ -141,7 +156,9 @@ export class PullRequestReviewWorkflow {
           postedFindingKeys: postableFindings.map(findingFingerprint),
           entry: {
             reviewedAt: new Date().toISOString(),
-            agent: agent.name,
+            agent: adversarialRan
+              ? `${agent.name}->${options.adversarialAgent!.name}`
+              : agent.name,
             findingCount: review.findings.length,
             postedFindingCount: postableFindings.length,
             dryRun: false,
@@ -157,10 +174,41 @@ export class PullRequestReviewWorkflow {
         newFindings: postableFindings,
         skippedDuplicateFindings,
         skippedUnpostableFindings,
+        adversarialRan,
+        adversarialReasons: adversarialDecision.reasons,
       };
     } finally {
       cleanupWorkdir(workdir, config.keepWorkdirs);
     }
+  }
+}
+
+async function runReviewAgent(args: {
+  agent: AgentAdapter;
+  workdir: string;
+  branch: string;
+  prompt: string;
+  label: string;
+}): Promise<ReviewResult> {
+  const result = await runAgent(args.agent, {
+    workdir: args.workdir,
+    branch: args.branch,
+    prompt: args.prompt,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `${args.label} agent exited ${result.exitCode}. stderr tail: ${result.stderr.slice(-1000)} stdout tail: ${result.stdout.slice(-1000)}`,
+    );
+  }
+  if (hasUncommittedChanges(args.workdir)) {
+    throw new Error(`${args.label} agent modified files during review-only mode; refusing to post.`);
+  }
+  try {
+    return parseReviewResult(result.stdout);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse ${args.label.toLowerCase()} agent output: ${String(err)}. stderr tail: ${result.stderr.slice(-1000)} stdout tail: ${result.stdout.slice(-1000)}`,
+    );
   }
 }
 

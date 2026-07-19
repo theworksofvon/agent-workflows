@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Reviewer"
+  short_description: "Find actionable defects in pull requests"
+  default_prompt: "Use $pr-reviewer to review this pull request for actionable defects."

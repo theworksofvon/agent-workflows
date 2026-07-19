@@ -19,6 +19,8 @@ function makeConfig(root: string): Config {
     agentRetryDelaySec: 1800,
     agentMaxAttempts: 5,
     agent: "fake",
+    reviewAdversarialMode: "off",
+    reviewAdversarialAgent: "fake",
     agentSelfUser: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",
