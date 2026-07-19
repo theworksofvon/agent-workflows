@@ -45,6 +45,7 @@ function makeConfig(root: string): Config {
     agent: "fake",
     reviewAdversarialMode: "off",
     reviewAdversarialAgent: "fake",
+    processExistingCommentsOnFirstRun: true,
     agentSelfUser: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",

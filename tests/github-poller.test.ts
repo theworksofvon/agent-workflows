@@ -21,6 +21,7 @@ function makeConfig(root: string): Config {
     agent: "fake",
     reviewAdversarialMode: "off",
     reviewAdversarialAgent: "fake",
+    processExistingCommentsOnFirstRun: true,
     agentSelfUser: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",
@@ -147,6 +148,62 @@ test("github poller processes old draft comments after PR becomes ready", async 
       [1],
     );
     assert.equal(secondPoll[0].payload.comments[0].id, 100);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("github poller skips existing comments on a new installation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-poller-bootstrap-"));
+  try {
+    let includeNewComment = false;
+    const client = {
+      async listOpenPRs() {
+        return [
+          {
+            number: 1,
+            title: "Ready",
+            body: null,
+            headRef: "ready-branch",
+            baseRef: "main",
+            draft: false,
+          },
+        ];
+      },
+      async listIssueComments() {
+        return [
+          {
+            id: 10,
+            author: "reviewer",
+            body: "existing comment",
+            createdAt: new Date(1_000).toISOString(),
+          },
+          ...(includeNewComment
+            ? [
+                {
+                  id: 11,
+                  author: "reviewer",
+                  body: "new comment",
+                  createdAt: new Date(2_000).toISOString(),
+                },
+              ]
+            : []),
+        ];
+      },
+      async listReviewComments() {
+        return [];
+      },
+    } as unknown as GitHubClient;
+
+    const config = makeConfig(root);
+    config.processExistingCommentsOnFirstRun = false;
+    const poller = githubPoller({ config, client });
+
+    assert.deepEqual(await poller.poll(), []);
+    includeNewComment = true;
+    const events = await poller.poll();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].payload.comments[0].id, 11);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,169 +1,196 @@
 # agent-workflows
 
-A local daemon that bridges signals — things that have no native bridge to your coding agents — and routes them to a pluggable coding agent.
+Connect GitHub pull-request activity to local coding agents, run structured PR
+reviews, and share portable agent skills across Codex, Claude Code, and Cursor.
 
-**Workflow #1 (built-in):** when a new comment appears on any of your PRs, the daemon creates an isolated git worktree for the PR branch, runs your coding agent with rich context (the comment + PR title/body + file + line + diff hunk), and pushes the resulting commits back to the PR branch.
+## What it offers
 
+| Capability | What happens |
+| --- | --- |
+| PR comment automation | Polls watched repositories, batches related feedback, runs an agent in an isolated worktree, and safely pushes resulting commits back to the PR branch. |
+| Manual PR review | Runs a read-only review against any accessible PR. It prints findings by default and can post one grouped GitHub review with `--post`. |
+| Adversarial review | Optionally sends the primary result through an independent verification pass for large, sensitive, or high-severity changes. |
+| Shared agent skills | Keeps repository-owned `SKILL.md` packages identical across Codex, Claude Code, and Cursor through personal-directory links. |
+| Model orchestration | Provides a portable planning → implementation → test → review → repair workflow with stage artifacts, usage records, and resumable checkpoints. Provider commands still need project-specific configuration. |
+
+```text
+PR feedback → poll and batch → isolated worktree → coding agent → guarded push
+                                              ↘ review-only → findings/review
 ```
-PR comment ─► poll ─► isolated worktree ─► agent (pluggable) ─► push to PR branch
-```
 
-## Why
+## Clean install
 
-Some agent loops are missing a bridge. Example: agent A opens a PR, agent B pushes a review comment on it — you want a coding agent to notice that comment and act on it automatically. This daemon is that watcher.
+### Prerequisites
 
-## Quick start
+- Git
+- Node 24 and npm 11 (`.nvmrc` and `package.json` pin the supported runtime)
+- A GitHub token
+- At least one supported agent CLI: Codex, Claude Code, or ZCode
+- Python 3.11+ only when using the model-orchestrator telemetry runner
+
+### 1. Set up the repository
 
 ```bash
-# 1. Install
-npm install
-
-# 2. Configure
-cp .env.example .env
-# edit .env: GITHUB_TOKEN, REPOS, AGENT (default: zcode); AGENT_SELF_USER optional
-
-# 3. Run
-npm run dev
+git clone <repository-url>
+cd agent-workflows
+nvm use                       # or install Node 24 another way
+npm run setup
 ```
 
-The daemon polls every 60s (configurable). On new comments it will log its progress and act.
+`npm run setup` installs locked dependencies, creates `.env` without
+overwriting an existing one, and links portable skills into the personal skill
+directories for Codex, Claude Code, and Cursor.
 
-Manual review-only mode is available when you want the configured agent to review a PR without making changes:
+### 2. Authenticate an agent
+
+Choose the adapter you will put in `.env`:
 
 ```bash
-npm run review -- owner/repo#123
-npm run review -- https://github.com/owner/repo/pull/123 --post
+codex login                   # AGENT=codex
+claude auth login             # AGENT=claude-code
 ```
 
-Review mode runs in an isolated worktree, asks for actionable PR findings only, and never commits or pushes. It dry-runs by default; pass `--post` to submit one grouped GitHub review.
+ZCode users must install and authenticate its CLI separately.
 
-The review policy lives in `skills/pr-reviewer` and is embedded into every adapter prompt. An optional adversarial pass independently verifies the primary result; `auto` mode reserves that second call for riskier changes.
+### 3. Configure GitHub
 
-See [docs/pr-review-mode.md](docs/pr-review-mode.md) for the short usage guide.
+Edit `.env`. The minimum daemon configuration is:
 
-## Testing
+```dotenv
+GITHUB_TOKEN=replace-me
+REPOS=owner/repo,owner/another-repo
+AGENT=codex
+```
+
+The token must be able to read PRs and comments, create comments/reviews, clone
+the repository, and push to its PR branches. For a fine-grained token this
+normally means repository Contents, Pull requests, and Issues read/write access.
+
+### 4. Verify and run
 
 ```bash
-npm test
-npm run typecheck
+npm run doctor
+npm start
 ```
 
-The default tests do not call GitHub or any LLM API. They use local git repositories/worktrees and fake agent binaries to verify orchestration and adapter behavior without spending tokens. Real agent/API smoke tests should stay opt-in.
+`doctor` checks the runtime, Git, `.env`, the selected agent executable and
+authentication, and shared skill links without making GitHub or model calls.
 
-GitHub Actions runs the same baseline checks on pull requests and pushes to `main`:
+The daemon polls every 60 seconds by default. Keep it under your preferred
+service manager if it must survive terminal exits or machine restarts.
+
+## Common commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run setup` | Install dependencies, create `.env`, and install shared skills. |
+| `npm run doctor` | Validate a machine before starting the daemon. |
+| `npm start` | Run the daemon. |
+| `npm run dev` | Run with source watching. |
+| `npm run review -- owner/repo#123` | Review a PR locally without posting or changing files. |
+| `npm run review -- owner/repo#123 --post` | Post new actionable findings as one grouped review. |
+| `npm run skills:install` | Refresh Codex, Claude, and Cursor links after adding a skill. |
+| `npm run typecheck && npm run check:scripts && npm test` | Run the no-token baseline checks. |
+
+Review targets can also be full GitHub PR URLs. Use `--adversarial` or
+`--no-adversarial` to override the configured review policy. See
+[docs/pr-review-mode.md](docs/pr-review-mode.md).
+
+## Safe first startup and state
+
+Runtime state lives under `STATE_DIR` (`./state` by default) and is intentionally
+not committed. It contains polling cursors, pending batches, duplicate guards,
+review history, cached bare repositories, and managed worktrees.
+
+A new state directory establishes cursors on its first successful poll and
+does **not** process comments that already existed. New comments are handled
+normally afterward. To intentionally process existing comments, set:
+
+```dotenv
+PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN=true
+```
+
+When moving a running daemon to another machine, copy `state/github/` while the
+old daemon is stopped. Cached repositories and worktrees can be recreated.
+Never run two daemon instances against the same repositories and state history.
+
+## Shared skills
+
+Portable skills live under `skills/` as the single source of truth:
+
+- `model-orchestrator` — staged multi-model planning, implementation, review,
+  repair, telemetry, and handoffs.
+- `pr-reviewer` — evidence-based, actionable PR review policy.
+
+The installer links each skill into:
+
+```text
+~/.codex/skills/
+~/.claude/skills/
+~/.cursor/skills/
+```
+
+Edits therefore reach all three tools immediately. Run `npm run skills:install`
+after adding a new skill. Restart Claude Code or open a new Cursor chat when a
+new personal skill directory is introduced. Tool-managed system/plugin skills
+remain owned by their respective runtimes and are not mirrored.
+
+The model-orchestrator skill is provider-neutral, but its example model aliases
+and `[providers]` table are not a ready-made account configuration. A project
+using its `mo.py` runner must define executable provider commands and real model
+identifiers in that project's `.orchestrator/config.toml`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | required | GitHub API, clone, review, comment, and push authentication. |
+| `REPOS` | required for daemon | Comma-separated `owner/repo` list. |
+| `AGENT` | `codex` | `codex`, `claude-code`, or `zcode`. |
+| `AGENT_SELF_USER` | unset | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
+| `POLL_INTERVAL_SEC` | `60` | Poll interval; minimum 5 seconds. |
+| `COMMENT_BATCH_WINDOW_SEC` | `120` | Quiet window before a comment batch runs. |
+| `REVIEW_ADVERSARIAL_MODE` | `auto` | `off`, `auto`, or `always`. |
+| `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT` | Adapter for the verification pass. |
+| `PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN` | `false` | Replay comments visible on the first poll. |
+| `STATE_DIR` | `./state` | Polling state, cached repos, and worktrees. |
+| `KEEP_WORKDIRS` | `false` | Retain worktrees for debugging. |
+
+Retention, retry, and binary override settings are documented in
+[.env.example](.env.example).
+
+## Guardrails and current limitations
+
+- Agents run unattended inside managed worktrees. Codex and Claude adapters use
+  their explicit permission-bypass flags; only run this on a trusted machine.
+- Pushes use `--force-with-lease` pinned to the fetched branch SHA, so a remote
+  update causes a safe failure instead of overwriting newer work.
+- Review-only mode rejects agent file changes and posts only findings that map
+  to right-side lines in the GitHub diff.
+- Bot output carries an invisible marker and is ignored on later polls, which
+  prevents feedback loops.
+- PR automation currently supports branches in the watched repository. Forked
+  PR head repositories are not yet resolved or pushed.
+- Execution is serial. Webhooks, concurrency, and a bundled background-service
+  definition are future extensions.
+- Real GitHub/model smoke tests are opt-in; normal tests use local repositories
+  and fake agent binaries and spend no tokens.
+
+## Development
 
 ```bash
 npm ci
 npm run typecheck
+npm run check:scripts
 npm test
 ```
 
-## Shared agent skills
+GitHub Actions runs the same checks on pull requests and pushes to `main` using
+Node 24.
 
-Portable skills live under `skills/` as the single source of truth. Link them
-into the personal skill directories used by Codex, Claude Code, and Cursor:
+The extension seams are intentionally small:
 
-```bash
-./scripts/install-shared-skills.sh
-```
-
-The installer creates per-skill symlinks rather than copies, so edits are
-immediately shared by all three tools. Run it again after adding a new skill.
-Tool-managed skills, such as Codex's `.system` skills and plugin-provided
-skills, remain owned by their respective runtimes and are not mirrored.
-
-## Configuration
-
-All via environment (`.env`):
-
-| Var | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `GITHUB_TOKEN` | yes | — | PAT with repo + PR comment read/write |
-| `REPOS` | yes | — | `owner/repo,owner/repo2` |
-| `AGENT_SELF_USER` | no | — | this daemon's GitHub username; when set, comments from it are also ignored. Leave unset for personal-token mode (relies on the marker tag alone) |
-| `POLL_INTERVAL_SEC` | no | `60` | seconds between polls |
-| `COMMENT_BATCH_WINDOW_SEC` | no | `120` | quiet-window seconds for grouping related comments before running an agent |
-| `PR_CONTEXT_HISTORY_LIMIT` | no | `5` | recent PR changelog entries included in an agent prompt |
-| `COMMENT_BATCH_HISTORY_LIMIT` | no | `20` | changelog entries retained per PR |
-| `PROCESSED_COMMENT_KEY_LIMIT` | no | `2000` | recently handled comment keys retained per repo for duplicate protection |
-| `AGENT_RETRY_DELAY_SEC` | no | `1800` | seconds to pause retryable agent failures before trying again |
-| `AGENT_MAX_ATTEMPTS` | no | `5` | maximum attempts for a retryable comment batch |
-| `AGENT` | no | `zcode` | which adapter: `zcode` \| `claude-code` \| `codex` |
-| `REVIEW_ADVERSARIAL_MODE` | no | `auto` | second review pass: `off` \| `auto` \| `always` |
-| `REVIEW_ADVERSARIAL_AGENT` | no | same as `AGENT` | adapter used for the independent adversarial pass |
-| `STATE_DIR` | no | `./state` | where repo state files, cached bare repos, and worktrees live (gitignored) |
-| `ZCODE_BIN` | no | `zcode` | path to the zcode binary |
-| `CLAUDE_CODE_BIN` | no | `claude` | path to the claude binary |
-| `CODEX_BIN` | no | `codex` | path to the codex binary |
-| `KEEP_WORKDIRS` | no | `false` | keep per-task workdirs for debugging |
-
-`REPOS` is required for daemon polling. Manual review mode can target any PR your `GITHUB_TOKEN` can read/write, even when that repo is not listed in `REPOS`.
-
-## Comment batching and loop prevention
-
-New comments are first held in a pending batch. Inline review comments are grouped by GitHub review submission when GitHub provides the review id; otherwise comments are grouped by PR. The daemon waits for `COMMENT_BATCH_WINDOW_SEC` seconds after the latest comment in the group, then emits one workflow event with all comments in that batch.
-
-GitHub state is stored per repo under `state/github/<owner>/<repo>.json`. Each file contains per-PR cursors, pending comment groups, recent processed comment keys, and bounded per-PR changelog. Agent prompts never receive raw state; they receive only the latest `PR_CONTEXT_HISTORY_LIMIT` changelog entries for the current PR.
-
-Draft PRs are skipped. When a draft becomes ready for review, per-PR cursors allow the daemon to pick up comments from that PR without another PR's newer comments hiding them.
-
-Bot-authored top-level conversation comments are ignored, while bot-authored inline review comments remain actionable and are batched by review id.
-
-The daemon posts every summary comment with an invisible HTML marker tag (`<!-- agent-workflows:bot -->`) and skips any comment carrying it, so the agent never reacts to its own output. If `AGENT_SELF_USER` is set, comments authored by that username are ignored too.
-
-Retryable agent failures such as rate limits, usage limits, quota errors, and temporary capacity errors are paused and retried later instead of being marked processed. A batch is marked processed only after the workflow completes.
-
-Leaving `AGENT_SELF_USER` unset enables **personal-token mode**: the daemon authenticates as you, the marker tag is the only loop guard, and your own comments still trigger it. Use a dedicated bot account and set `AGENT_SELF_USER` to its username if you instead want every comment from that account ignored regardless of the marker.
-
-## The four extension seams
-
-Adding new behavior is meant to be small and local:
-
-1. **Sources** (`src/sources/types.ts`) — produce events. Today a GitHub poller.
-2. **Workflows** (`src/workflows/`) — handle an event `kind`. Drop a folder in `workflows/`, implement `kind` + `handle`, register it in `workflows/registry.ts`.
-3. **Agent adapters** (`src/agents/`) — which CLI does the work. Add a file implementing `AgentAdapter` and register in `agents/registry.ts`.
-4. **Worktrees** (`src/runner/workdir.ts`) — where the agent runs. Cached repos plus isolated git worktrees today.
-
-### Example: add a new workflow
-
-```ts
-// src/workflows/ci-failed/index.ts
-import type { Workflow } from "../types.js";
-
-export function ciFailedWorkflow(): Workflow {
-  return {
-    kind: "ci_failed",
-    async handle(event, ctx) { /* ... */ },
-  };
-}
-```
-Then register it in `workflows/registry.ts` alongside `prCommentWorkflow`.
-
-## Safety notes
-
-- The agent runs with unattended permissions in an isolated git worktree. It only touches its managed worktree; the push to the PR uses an explicit `--force-with-lease` pinned to the branch SHA captured when the worktree was created.
-- If the agent leaves uncommitted edits, the orchestrator creates a fallback commit before pushing.
-- Any comment carrying the marker tag is skipped, as are comments authored by `AGENT_SELF_USER` when it is set.
-- Execution is serial — one task at a time — so concurrent PR pushes never race.
-
-## Layout
-
-```
-src/
-  index.ts          entry: load config, wire everything, start daemon
-  daemon.ts         poll loop + serial queue + dispatch
-  config.ts         typed env config
-  store.ts          generic JSON-backed state helper
-  queue.ts          serial task queue
-  log.ts            structured logger
-  github/           octokit client + PR comment poller
-    state.ts        typed per-repo GitHub state files
-  sources/          Source seam
-  agents/           AgentAdapter seam + zcode/claude-code adapters
-  workflows/        Workflow seam + pr-comment/
-  runner/           cached repo/worktree preparation + executor
-```
-
-## Status
-
-v0.1 — framework + PR-comment workflow + zcode, Claude Code, and Codex adapters. Webhook source, concurrency, and deeper review-comment linking are deliberate follow-ups (the seams already support them).
+1. `src/sources/` produces events.
+2. `src/workflows/` handles event kinds.
+3. `src/agents/` adapts coding-agent CLIs.
+4. `src/runner/` prepares isolated worktrees and executes agents.

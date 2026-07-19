@@ -4,7 +4,16 @@
   "private": true,
   "description": "Local daemon that bridges signals (PR comments, etc.) to pluggable coding agents.",
   "type": "module",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11"
+  },
+  "packageManager": "npm@11.16.0",
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "skills:install": "node scripts/install-shared-skills.mjs",
+    "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs && node --check scripts/install-shared-skills.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "review": "tsx src/index.ts review",
@@ -19,5 +28,9 @@
     "@types/node": "^22.20.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true
   }
 }

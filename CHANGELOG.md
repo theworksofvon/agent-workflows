@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Make Clean Installation Reproducible
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Turn machine-local setup assumptions into a documented, verifiable clean-install flow.
+Message: A new machine can install dependencies and shared skills with `npm run setup`, validate local requirements with `npm run doctor`, and start without replaying existing PR comments.
+Added/Changed: Pinned Node 24/npm 11, added cross-platform setup/doctor/skill installers, made Codex the explicit default, added safe first-poll cursor initialization, and rewrote the README around capabilities and clean installation.
+Fixed/Removed: Unknown adapters now fail instead of silently falling back to missing ZCode; existing comments are skipped on a new state directory unless explicitly enabled.
+Handoff: Verified with setup/doctor checks, TypeScript typechecking, the no-token test suite, and model-orchestrator Python tests.
+
 ### Document Current Runtime Behavior
 
 Date: 2026-07-05 18:07:00 CDT; Status: In Progress; PR: Pending on `codex/docs-current-behavior`.

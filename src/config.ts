@@ -22,6 +22,7 @@ export interface Config {
   agent: string;
   reviewAdversarialMode: ReviewAdversarialMode;
   reviewAdversarialAgent: string;
+  processExistingCommentsOnFirstRun: boolean;
   agentSelfUser: string | null;
   stateDir: string;
   zcodeBin: string;
@@ -66,7 +67,7 @@ function parseRepos(raw: string): RepoSpec[] {
 export function loadConfig(options: LoadConfigOptions = {}): Config {
   const requireRepos = options.requireRepos ?? true;
   const rawRepos = process.env.REPOS?.trim() ?? "";
-  const agent = optional("AGENT", "zcode");
+  const agent = optional("AGENT", "codex");
   const reviewAdversarialMode = optional("REVIEW_ADVERSARIAL_MODE", "auto");
   if (!isReviewAdversarialMode(reviewAdversarialMode)) {
     throw new Error("REVIEW_ADVERSARIAL_MODE must be one of: off, auto, always.");
@@ -84,6 +85,8 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     agent,
     reviewAdversarialMode,
     reviewAdversarialAgent: optional("REVIEW_ADVERSARIAL_AGENT", agent),
+    processExistingCommentsOnFirstRun:
+      optional("PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN", "false") === "true",
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
@@ -122,6 +125,7 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     agent: cfg.agent,
     reviewAdversarialMode: cfg.reviewAdversarialMode,
     reviewAdversarialAgent: cfg.reviewAdversarialAgent,
+    processExistingCommentsOnFirstRun: cfg.processExistingCommentsOnFirstRun,
     pollIntervalSec: cfg.pollIntervalSec,
     commentBatchWindowSec: cfg.commentBatchWindowSec,
     prContextHistoryLimit: cfg.prContextHistoryLimit,

@@ -28,6 +28,7 @@ export interface GitHubPullRequestState {
 }
 
 export interface GitHubRepoState {
+  pollingInitialized: boolean;
   cursors: GitHubRepoCursors;
   pendingCommentGroups: Record<string, PendingCommentGroup>;
   processedCommentKeys: string[];
@@ -53,6 +54,7 @@ export interface PRReviewRunHistory {
 }
 
 const defaultState = (): GitHubRepoState => ({
+  pollingInitialized: false,
   cursors: {
     issueCommentId: 0,
     reviewCommentId: 0,
@@ -94,6 +96,16 @@ export class GitHubRepoStateStore {
       processedCommentKeyLimit: config.processedCommentKeyLimit,
       commentBatchHistoryLimit: config.commentBatchHistoryLimit,
     });
+  }
+
+  isPollingInitialized(): boolean {
+    return this.state.pollingInitialized;
+  }
+
+  markPollingInitialized(): void {
+    if (this.state.pollingInitialized) return;
+    this.state.pollingInitialized = true;
+    this.persist();
   }
 
   getIssueCommentCursor(prNumber: number): number {
@@ -320,6 +332,9 @@ function normalizeState(raw: unknown): GitHubRepoState {
     };
   }
   return {
+    // State files created before this field existed were already live, so they
+    // must not be treated as a brand-new installation and replay old comments.
+    pollingInitialized: state.pollingInitialized ?? true,
     cursors: {
       issueCommentId: state.cursors?.issueCommentId ?? 0,
       reviewCommentId: state.cursors?.reviewCommentId ?? 0,

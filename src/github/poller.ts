@@ -76,6 +76,7 @@ export function githubPoller(args: {
     const events: Event[] = [];
     const now = Date.now();
     const state = GitHubRepoStateStore.fromConfig(config, repo);
+    const firstPoll = !state.isPollingInitialized();
     const prs = await client.listOpenPRs(repo);
 
     for (const pr of prs) {
@@ -92,6 +93,7 @@ export function githubPoller(args: {
       const issueComments = await client.listIssueComments(repo, pr.number);
       for (const c of issueComments) {
         if (c.id <= lastIssue) continue;
+        if (firstPoll && !config.processExistingCommentsOnFirstRun) continue;
         if (isSelf(c.body, c.author)) continue;
         if (isBotAuthor(c.author)) continue;
         const key = commentKey(repo, pr.number, "issue", c.id);
@@ -118,6 +120,7 @@ export function githubPoller(args: {
       const reviewComments = await client.listReviewComments(repo, pr.number);
       for (const c of reviewComments) {
         if (c.id <= lastReview) continue;
+        if (firstPoll && !config.processExistingCommentsOnFirstRun) continue;
         if (isSelf(c.body, c.author)) continue;
         const key = commentKey(repo, pr.number, "review", c.id);
         if (state.hasProcessedComment(key)) continue;
@@ -142,6 +145,8 @@ export function githubPoller(args: {
       const maxReview = reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview);
       state.setReviewCommentCursor(pr.number, maxReview);
     }
+
+    state.markPollingInitialized();
 
     const windowMs = config.commentBatchWindowSec * 1000;
     for (const payload of state.takeReadyCommentBatches(now, windowMs)) {
