@@ -58,6 +58,20 @@ npm run typecheck
 npm test
 ```
 
+## Shared agent skills
+
+Portable skills live under `skills/` as the single source of truth. Link them
+into the personal skill directories used by Codex, Claude Code, and Cursor:
+
+```bash
+./scripts/install-shared-skills.sh
+```
+
+The installer creates per-skill symlinks rather than copies, so edits are
+immediately shared by all three tools. Run it again after adding a new skill.
+Tool-managed skills, such as Codex's `.system` skills and plugin-provided
+skills, remain owned by their respective runtimes and are not mirrored.
+
 ## Configuration
 
 All via environment (`.env`):
