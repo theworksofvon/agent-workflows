@@ -37,6 +37,8 @@ function makeConfig(root: string): Config {
     repos: [],
     pollIntervalSec: 60,
     commentBatchWindowSec: 120,
+    commentBatchMinComments: 2,
+    commentBatchMaxWaitSec: 300,
     prContextHistoryLimit: 5,
     commentBatchHistoryLimit: 20,
     processedCommentKeyLimit: 2000,

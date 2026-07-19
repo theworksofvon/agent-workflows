@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Gate Comment Runs And Compile Production
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Keep immediate event delivery from creating one model run per comment and remove runtime TypeScript transpilation from production.
+Message: Comment groups now wait for a configurable count threshold or maximum age, and production runs compiled JavaScript under Node while development retains `tsx` watch mode.
+Added/Changed: Added two-comment/five-minute batch defaults, a 10-second quiet debounce, `npm run build`, source maps, setup/doctor build integration, and CI production-build validation.
+Fixed/Removed: Prevents bursty review feedback from causing one agent run per comment without leaving a lone comment pending forever; removes `tsx` from the production execution path.
+Handoff: Verify with the no-token test suite, `npm run build`, `npm run doctor`, and a compiled CLI startup smoke test.
+
 ### Make Clean Installation Reproducible
 
 Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.

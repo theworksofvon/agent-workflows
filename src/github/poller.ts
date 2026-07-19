@@ -148,8 +148,11 @@ export function githubPoller(args: {
 
     state.markPollingInitialized();
 
-    const windowMs = config.commentBatchWindowSec * 1000;
-    for (const payload of state.takeReadyCommentBatches(now, windowMs)) {
+    for (const payload of state.takeReadyCommentBatches(now, {
+      quietWindowMs: config.commentBatchWindowSec * 1000,
+      minComments: config.commentBatchMinComments,
+      maxWaitMs: config.commentBatchMaxWaitSec * 1000,
+    })) {
       events.push({
         kind: "pr_comment",
         id: payload.batchId,

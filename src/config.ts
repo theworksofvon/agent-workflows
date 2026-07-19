@@ -14,6 +14,8 @@ export interface Config {
   repos: RepoSpec[];
   pollIntervalSec: number;
   commentBatchWindowSec: number;
+  commentBatchMinComments: number;
+  commentBatchMaxWaitSec: number;
   prContextHistoryLimit: number;
   commentBatchHistoryLimit: number;
   processedCommentKeyLimit: number;
@@ -76,7 +78,9 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     githubToken: required("GITHUB_TOKEN"),
     repos: rawRepos === "" ? [] : parseRepos(rawRepos),
     pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
-    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "120")),
+    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "10")),
+    commentBatchMinComments: Number(optional("COMMENT_BATCH_MIN_COMMENTS", "2")),
+    commentBatchMaxWaitSec: Number(optional("COMMENT_BATCH_MAX_WAIT_SEC", "300")),
     prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
     commentBatchHistoryLimit: Number(optional("COMMENT_BATCH_HISTORY_LIMIT", "20")),
     processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
@@ -100,6 +104,12 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   }
   if (!Number.isFinite(cfg.commentBatchWindowSec) || cfg.commentBatchWindowSec < 0) {
     throw new Error("COMMENT_BATCH_WINDOW_SEC must be a number >= 0.");
+  }
+  if (!Number.isInteger(cfg.commentBatchMinComments) || cfg.commentBatchMinComments < 1) {
+    throw new Error("COMMENT_BATCH_MIN_COMMENTS must be an integer >= 1.");
+  }
+  if (!Number.isFinite(cfg.commentBatchMaxWaitSec) || cfg.commentBatchMaxWaitSec < 0) {
+    throw new Error("COMMENT_BATCH_MAX_WAIT_SEC must be a number >= 0.");
   }
   if (!Number.isInteger(cfg.prContextHistoryLimit) || cfg.prContextHistoryLimit < 0) {
     throw new Error("PR_CONTEXT_HISTORY_LIMIT must be an integer >= 0.");
@@ -128,6 +138,8 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     processExistingCommentsOnFirstRun: cfg.processExistingCommentsOnFirstRun,
     pollIntervalSec: cfg.pollIntervalSec,
     commentBatchWindowSec: cfg.commentBatchWindowSec,
+    commentBatchMinComments: cfg.commentBatchMinComments,
+    commentBatchMaxWaitSec: cfg.commentBatchMaxWaitSec,
     prContextHistoryLimit: cfg.prContextHistoryLimit,
     agentRetryDelaySec: cfg.agentRetryDelaySec,
     agentMaxAttempts: cfg.agentMaxAttempts,

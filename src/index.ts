@@ -12,7 +12,15 @@ import type { PullRequestReviewRunResult } from "./workflows/pr-review/index.js"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
+    printHelp();
+    return;
+  }
   if (args[0] === "review") {
+    if (args[1] === "--help" || args[1] === "-h" || args[1] === "help") {
+      printHelp();
+      return;
+    }
     await runReviewCommand(args.slice(1));
     return;
   }
@@ -35,6 +43,19 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => stop("SIGTERM"));
 
   await daemon.start();
+}
+
+function printHelp(): void {
+  console.log(`agent-workflows
+
+Usage:
+  npm start
+  npm run review -- owner/repo#123 [--post] [--adversarial|--no-adversarial]
+
+Commands:
+  daemon   Poll configured repositories and process ready comment batches (default)
+  review   Run a read-only pull-request review; add --post to publish findings
+  help     Show this message`);
 }
 
 async function runReviewCommand(args: string[]): Promise<void> {

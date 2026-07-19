@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Build production JavaScript
+        run: npm run build
+
       - name: Check setup scripts
         run: npm run check:scripts
 

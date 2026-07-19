@@ -166,11 +166,22 @@ export class GitHubRepoStateStore {
     this.persist();
   }
 
-  takeReadyCommentBatches(now: number, windowMs: number): PRCommentPayload[] {
+  takeReadyCommentBatches(
+    now: number,
+    policy: {
+      quietWindowMs: number;
+      minComments: number;
+      maxWaitMs: number;
+    },
+  ): PRCommentPayload[] {
     const ready: PRCommentPayload[] = [];
     for (const [groupKey, group] of Object.entries(this.state.pendingCommentGroups)) {
       if (group.retryAfterMs !== undefined && now < group.retryAfterMs) continue;
-      if (now - group.lastSeenAtMs < windowMs) continue;
+      if (now - group.lastSeenAtMs < policy.quietWindowMs) continue;
+      const thresholdReached = group.comments.length >= policy.minComments;
+      const maximumWaitReached =
+        policy.maxWaitMs > 0 && now - group.firstSeenAtMs >= policy.maxWaitMs;
+      if (!thresholdReached && !maximumWaitReached) continue;
       group.attempts += 1;
       group.retryAfterMs = undefined;
       group.lastError = undefined;

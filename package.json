@@ -15,8 +15,9 @@
     "skills:install": "node scripts/install-shared-skills.mjs",
     "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs && node --check scripts/install-shared-skills.mjs",
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "review": "tsx src/index.ts review",
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/index.js",
+    "review": "node --enable-source-maps dist/index.js review",
     "test": "node --import tsx --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

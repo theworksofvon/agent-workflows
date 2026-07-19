@@ -37,9 +37,9 @@ nvm use                       # or install Node 24 another way
 npm run setup
 ```
 
-`npm run setup` installs locked dependencies, creates `.env` without
-overwriting an existing one, and links portable skills into the personal skill
-directories for Codex, Claude Code, and Cursor.
+`npm run setup` installs locked dependencies, builds production JavaScript,
+creates `.env` without overwriting an existing one, and links portable skills
+into the personal skill directories for Codex, Claude Code, and Cursor.
 
 ### 2. Authenticate an agent
 
@@ -85,7 +85,8 @@ service manager if it must survive terminal exits or machine restarts.
 | --- | --- |
 | `npm run setup` | Install dependencies, create `.env`, and install shared skills. |
 | `npm run doctor` | Validate a machine before starting the daemon. |
-| `npm start` | Run the daemon. |
+| `npm run build` | Compile TypeScript and source maps into `dist/`. |
+| `npm start` | Run the compiled daemon with Node. |
 | `npm run dev` | Run with source watching. |
 | `npm run review -- owner/repo#123` | Review a PR locally without posting or changing files. |
 | `npm run review -- owner/repo#123 --post` | Post new actionable findings as one grouped review. |
@@ -95,6 +96,26 @@ service manager if it must survive terminal exits or machine restarts.
 Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 `--no-adversarial` to override the configured review policy. See
 [docs/pr-review-mode.md](docs/pr-review-mode.md).
+
+The compiled production process remains terminal-friendly: logs stream live,
+`Ctrl+C` performs graceful shutdown, and child agent/Git processes behave the
+same as in development. Use `npm run dev` when automatic restart after source
+edits is desired.
+
+## Token-aware comment batching
+
+Immediate event delivery does not imply one model call per comment. Every event
+source feeds the same batch gate:
+
+1. Related comments are grouped by PR conversation or GitHub review ID.
+2. A 10-second quiet period absorbs comments arriving together.
+3. Two related comments make the batch eligible to run.
+4. A lone comment runs after five minutes so important feedback is not ignored.
+
+The defaults can be adjusted with `COMMENT_BATCH_WINDOW_SEC`,
+`COMMENT_BATCH_MIN_COMMENTS`, and `COMMENT_BATCH_MAX_WAIT_SEC`. Future webhook
+delivery will reuse this gate; webhooks will remove polling latency without
+bypassing token controls.
 
 ## Safe first startup and state
 
@@ -149,7 +170,9 @@ identifiers in that project's `.orchestrator/config.toml`.
 | `AGENT` | `codex` | `codex`, `claude-code`, or `zcode`. |
 | `AGENT_SELF_USER` | unset | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
 | `POLL_INTERVAL_SEC` | `60` | Poll interval; minimum 5 seconds. |
-| `COMMENT_BATCH_WINDOW_SEC` | `120` | Quiet window before a comment batch runs. |
+| `COMMENT_BATCH_WINDOW_SEC` | `10` | Quiet debounce after the latest related comment. |
+| `COMMENT_BATCH_MIN_COMMENTS` | `2` | Related-comment count that makes a batch eligible. |
+| `COMMENT_BATCH_MAX_WAIT_SEC` | `300` | Maximum age before a smaller batch becomes eligible; `0` disables it. |
 | `REVIEW_ADVERSARIAL_MODE` | `auto` | `off`, `auto`, or `always`. |
 | `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT` | Adapter for the verification pass. |
 | `PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN` | `false` | Replay comments visible on the first poll. |
@@ -181,6 +204,7 @@ Retention, retry, and binary override settings are documented in
 ```bash
 npm ci
 npm run typecheck
+npm run build
 npm run check:scripts
 npm test
 ```

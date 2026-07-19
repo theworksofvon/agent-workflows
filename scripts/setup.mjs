@@ -17,6 +17,8 @@ if (!skipInstall) {
   run(process.platform === "win32" ? "npm.cmd" : "npm", ["ci"]);
 }
 
+run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"]);
+
 const envPath = join(repoRoot, ".env");
 if (!existsSync(envPath)) {
   copyFileSync(join(repoRoot, ".env.example"), envPath);

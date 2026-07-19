@@ -13,6 +13,8 @@ function makeConfig(root: string): Config {
     repos: [{ owner: "local-owner", repo: "sample-repo" }],
     pollIntervalSec: 60,
     commentBatchWindowSec: 0,
+    commentBatchMinComments: 1,
+    commentBatchMaxWaitSec: 0,
     prContextHistoryLimit: 5,
     commentBatchHistoryLimit: 20,
     processedCommentKeyLimit: 2000,
