@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Orchestrator"
+  short_description: "Coordinate planning, coding, and review models"
+  default_prompt: "Use $model-orchestrator to coordinate a long-running coding task across planning, implementation, and review models."
