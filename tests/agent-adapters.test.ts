@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { claudeCodeAdapter } from "../src/agents/claude-code.js";
@@ -32,6 +39,7 @@ process.stdin.on("end", () => {
     cwd: process.cwd(),
     stdin,
   }, null, 2));
+  process.stderr.write("fake warning\\n");
   process.stdout.write("fake agent complete\\n");
 });
 `,
@@ -55,6 +63,7 @@ async function runAdapter(args: {
     });
     assert.equal(result.exitCode, 0);
     assert.match(result.stdout, /fake agent complete/);
+    assert.match(result.stderr, /fake warning/);
     return JSON.parse(readFileSync(args.capturePath, "utf8")) as Capture;
   } finally {
     if (previousCapture === undefined) {
@@ -99,7 +108,10 @@ test("zcode adapter invokes zcode print mode with prompt on stdin", async () => 
       workdir: root,
     });
 
-    assert.deepEqual(capture.argv, ["--print", "--dangerously-skip-permissions"]);
+    assert.deepEqual(capture.argv, [
+      "--print",
+      "--dangerously-skip-permissions",
+    ]);
     assert.equal(capture.cwd, realpathSync(root));
     assert.equal(capture.stdin, "review prompt");
   } finally {
@@ -120,6 +132,39 @@ test("claude-code adapter invokes claude print mode with prompt on stdin", async
     assert.deepEqual(capture.argv, ["-p", "--dangerously-skip-permissions"]);
     assert.equal(capture.cwd, realpathSync(root));
     assert.equal(capture.stdin, "review prompt");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("all adapters report spawn errors and signal exits without invoking a real agent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-agent-errors-"));
+  try {
+    const signalBinary = join(root, "signal-agent.js");
+    writeFileSync(
+      signalBinary,
+      "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n",
+    );
+    chmodSync(signalBinary, 0o755);
+    const factories = [codexAdapter, zcodeAdapter, claudeCodeAdapter];
+    for (const factory of factories) {
+      const missing = await factory({
+        binary: join(root, "does-not-exist"),
+      }).run({
+        workdir: root,
+        branch: "feature",
+        prompt: "prompt",
+      });
+      assert.equal(missing.exitCode, -1);
+      assert.match(missing.stderr, /ENOENT/);
+
+      const signaled = await factory({ binary: signalBinary }).run({
+        workdir: root,
+        branch: "feature",
+        prompt: "prompt",
+      });
+      assert.equal(signaled.exitCode, -1);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

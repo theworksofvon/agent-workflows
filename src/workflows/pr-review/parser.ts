@@ -1,6 +1,5 @@
+import { REVIEW_SEVERITIES } from "./types.js";
 import type { ReviewFinding, ReviewResult, ReviewSeverity } from "./types.js";
-
-const SEVERITIES: readonly ReviewSeverity[] = ["critical", "high", "medium", "low"];
 
 export function parseReviewResult(output: string): ReviewResult {
   const trimmed = output.trim();
@@ -12,7 +11,9 @@ export function parseReviewResult(output: string): ReviewResult {
   try {
     value = JSON.parse(trimmed);
   } catch (err) {
-    throw new Error(`Review agent output was not valid JSON: ${String(err)}`);
+    throw new Error(`Review agent output was not valid JSON: ${String(err)}`, {
+      cause: err,
+    });
   }
 
   if (!isRecord(value)) {
@@ -54,8 +55,13 @@ function normalizeFinding(value: unknown): ReviewFinding {
   if (typeof body !== "string" || body.trim() === "") {
     throw new Error("Review finding body must be a non-empty string.");
   }
-  if (typeof severity !== "string" || !SEVERITIES.includes(severity as ReviewSeverity)) {
-    throw new Error(`Review finding severity must be one of: ${SEVERITIES.join(", ")}.`);
+  if (
+    typeof severity !== "string" ||
+    !REVIEW_SEVERITIES.includes(severity as ReviewSeverity)
+  ) {
+    throw new Error(
+      `Review finding severity must be one of: ${REVIEW_SEVERITIES.join(", ")}.`,
+    );
   }
 
   return {

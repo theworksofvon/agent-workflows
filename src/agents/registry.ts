@@ -18,7 +18,9 @@ export function getAgent(name: string, cfg: Config): AgentAdapter {
     case "codex":
       return codexAdapter({ binary: cfg.codexBin });
     default:
-      log.error("unknown agent adapter, falling back to zcode", { requested: name });
-      return zcodeAdapter({ binary: cfg.zcodeBin });
+      log.error("unknown agent adapter", { requested: name });
+      throw new Error(
+        `Unknown agent adapter "${name}". Expected one of: codex, claude-code, zcode.`,
+      );
   }
 }

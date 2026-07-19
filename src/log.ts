@@ -11,27 +11,36 @@ const LEVELS: Record<Level, number> = {
   error: 40,
 };
 
-const minLevel: Level =
-  (process.env.LOG_LEVEL as Level | undefined) ?? "info";
-
-function fmt(level: Level, msg: string, meta?: Record<string, unknown>): string {
+function fmt(
+  level: Level,
+  msg: string,
+  meta?: Record<string, unknown>,
+): string {
   const ts = new Date().toISOString();
   const base = `${ts} [${level.toUpperCase()}] ${msg}`;
   if (!meta || Object.keys(meta).length === 0) return base;
   return `${base} ${JSON.stringify(meta)}`;
 }
 
-export const log = {
-  debug(msg: string, meta?: Record<string, unknown>) {
-    if (LEVELS[minLevel] <= LEVELS.debug) console.debug(fmt("debug", msg, meta));
-  },
-  info(msg: string, meta?: Record<string, unknown>) {
-    if (LEVELS[minLevel] <= LEVELS.info) console.log(fmt("info", msg, meta));
-  },
-  warn(msg: string, meta?: Record<string, unknown>) {
-    if (LEVELS[minLevel] <= LEVELS.warn) console.warn(fmt("warn", msg, meta));
-  },
-  error(msg: string, meta?: Record<string, unknown>) {
-    if (LEVELS[minLevel] <= LEVELS.error) console.error(fmt("error", msg, meta));
-  },
-};
+export function createLogger(minLevel: Level = "info") {
+  return {
+    debug(msg: string, meta?: Record<string, unknown>) {
+      if (LEVELS[minLevel] <= LEVELS.debug)
+        console.debug(fmt("debug", msg, meta));
+    },
+    info(msg: string, meta?: Record<string, unknown>) {
+      if (LEVELS[minLevel] <= LEVELS.info) console.log(fmt("info", msg, meta));
+    },
+    warn(msg: string, meta?: Record<string, unknown>) {
+      if (LEVELS[minLevel] <= LEVELS.warn) console.warn(fmt("warn", msg, meta));
+    },
+    error(msg: string, meta?: Record<string, unknown>) {
+      if (LEVELS[minLevel] <= LEVELS.error)
+        console.error(fmt("error", msg, meta));
+    },
+  };
+}
+
+export const log = createLogger(
+  (process.env.LOG_LEVEL as Level | undefined) ?? "info",
+);

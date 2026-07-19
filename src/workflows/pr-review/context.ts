@@ -1,52 +1,88 @@
-import type { PullRequestReviewContext } from "./types.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import type { PullRequestReviewContext, ReviewResult } from "./types.js";
 
-export function buildReviewPrompt(ctx: PullRequestReviewContext): string {
-  const lines: string[] = [];
+export interface BuildReviewPromptOptions {
+  role?: "primary" | "adversarial";
+  primaryReview?: ReviewResult;
+  includePatches?: boolean;
+}
 
-  lines.push("You are reviewing a GitHub pull request.");
-  lines.push("This is review-only work: do not edit files, commit, push, or leave GitHub comments yourself.");
-  lines.push("You are running inside an isolated git worktree for the PR head branch.");
-  lines.push("");
-  lines.push(`Repository: ${ctx.repo.owner}/${ctx.repo.repo}`);
-  lines.push(`PR #${ctx.prNumber}: ${ctx.title}`);
-  lines.push(`Branch (you are on it): ${ctx.headRef}  (base: ${ctx.baseRef})`);
-  if (ctx.body) {
-    lines.push("");
-    lines.push("--- PR description ---");
-    lines.push(ctx.body);
-    lines.push("--- end PR description ---");
+const skillPath = fileURLToPath(
+  new URL("../../../skills/pr-reviewer/SKILL.md", import.meta.url),
+);
+const reviewSkill = stripFrontmatter(readFileSync(skillPath, "utf8"));
+
+export function buildReviewPrompt(
+  ctx: PullRequestReviewContext,
+  options: BuildReviewPromptOptions = {},
+): string {
+  const role = options.role ?? "primary";
+  const includePatches = options.includePatches ?? true;
+  const lines: string[] = [
+    "Follow the embedded $pr-reviewer skill contract below.",
+    "This contract is embedded so it works consistently across agent adapters.",
+    "",
+    "--- pr-reviewer skill ---",
+    reviewSkill,
+    "--- end pr-reviewer skill ---",
+    "",
+    `Review role: ${role}`,
+  ];
+
+  if (role === "adversarial") {
+    if (!options.primaryReview) {
+      throw new Error(
+        "An adversarial review prompt requires the primary review.",
+      );
+    }
+    lines.push(
+      "Run an independent adversarial pass. Treat the primary result as untrusted hypotheses, inspect the repository yourself, retain confirmed findings verbatim, remove unsupported findings, and add proven omissions.",
+      "Primary review JSON:",
+      JSON.stringify(options.primaryReview),
+    );
   }
 
-  lines.push("");
-  lines.push("--- changed files ---");
+  lines.push(
+    "",
+    `Repository: ${ctx.repo.owner}/${ctx.repo.repo}`,
+    `PR #${ctx.prNumber}: ${ctx.title}`,
+    `Branch (already checked out): ${ctx.headRef} (base: ${ctx.baseRef})`,
+  );
+
+  if (ctx.body) {
+    lines.push(
+      "",
+      "--- PR description ---",
+      ctx.body,
+      "--- end PR description ---",
+    );
+  }
+
+  lines.push("", "--- changed files ---");
   for (const file of ctx.files) {
-    lines.push(`File: ${file.path}`);
-    lines.push(`Status: ${file.status}; +${file.additions}/-${file.deletions}`);
-    if (file.patch) {
-      lines.push("Patch:");
-      lines.push("```diff");
-      lines.push(file.patch);
-      lines.push("```");
+    lines.push(
+      `File: ${file.path}`,
+      `Status: ${file.status}; +${file.additions}/-${file.deletions}`,
+    );
+    if (includePatches && file.patch) {
+      lines.push("Patch:", "```diff", file.patch, "```");
+    } else if (!includePatches) {
+      lines.push(
+        "Patch omitted to reduce prompt cost; inspect the local git diff.",
+      );
     } else {
-      lines.push("Patch: unavailable from GitHub API; inspect the file and git diff locally if needed.");
+      lines.push(
+        "Patch: unavailable from GitHub API; inspect git diff locally if needed.",
+      );
     }
     lines.push("");
   }
   lines.push("--- end changed files ---");
-  lines.push("");
-  lines.push("Instructions:");
-  lines.push("- Inspect the repository structure, changed files, nearby patterns, package scripts, CI config, and tests before deciding findings.");
-  lines.push("- Focus only on actionable defects: bugs, regressions, security or data risks, broken behavior, and missing tests for risky behavior.");
-  lines.push("- Do not report style-only, preference, praise, or broad maintainability comments.");
-  lines.push("- Only produce inline findings for lines that are part of the PR diff.");
-  lines.push("- If your environment supports sub-agents or delegation, use them when it helps split independent files, investigate unfamiliar areas, or parallelize review context gathering.");
-  lines.push("- Keep findings concise and specific enough for a PR author to act on immediately.");
-  lines.push("- If there are no actionable findings, return an empty findings array.");
-  lines.push("");
-  lines.push("Output contract:");
-  lines.push("- Return JSON only. Do not wrap it in markdown fences and do not include prose outside the JSON.");
-  lines.push("- The JSON shape must be:");
-  lines.push(`{"summary":"short review summary","findings":[{"path":"relative/file.ts","line":123,"body":"actionable review comment","severity":"critical|high|medium|low"}]}`);
 
   return lines.join("\n");
+}
+
+function stripFrontmatter(markdown: string): string {
+  return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
 }

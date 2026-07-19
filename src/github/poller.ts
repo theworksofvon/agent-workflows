@@ -46,6 +46,11 @@ export interface PRCommentPayload {
   comments: PRCommentItem[];
 }
 
+export type GitHubPollingClient = Pick<
+  GitHubClient,
+  "listOpenPRs" | "listIssueComments" | "listReviewComments"
+>;
+
 /**
  * Polls configured repos for new PR comments (both conversation and inline
  * review comments). Owns per-PR cursors in repo-scoped state. Filters out the
@@ -53,8 +58,8 @@ export interface PRCommentPayload {
  */
 export function githubPoller(args: {
   config: Config;
-  client: GitHubClient;
-}): Source {
+  client: GitHubPollingClient;
+}): Source<PRCommentPayload> {
   const { config, client } = args;
 
   /** True if a comment was authored by this daemon or tagged as its output. */
@@ -68,14 +73,22 @@ export function githubPoller(args: {
     return author.toLowerCase().endsWith("[bot]");
   }
 
-  function commentKey(repo: RepoSpec, prNumber: number, kind: "issue" | "review", id: number): string {
+  function commentKey(
+    repo: RepoSpec,
+    prNumber: number,
+    kind: "issue" | "review",
+    id: number,
+  ): string {
     return `${repo.owner}/${repo.repo}#${prNumber}:${kind}:${id}`;
   }
 
-  async function pollRepo(repo: RepoSpec): Promise<Event[]> {
-    const events: Event[] = [];
+  async function pollRepo(
+    repo: RepoSpec,
+  ): Promise<Array<Event<PRCommentPayload>>> {
+    const events: Array<Event<PRCommentPayload>> = [];
     const now = Date.now();
     const state = GitHubRepoStateStore.fromConfig(config, repo);
+    const firstPoll = !state.isPollingInitialized();
     const prs = await client.listOpenPRs(repo);
 
     for (const pr of prs) {
@@ -92,6 +105,7 @@ export function githubPoller(args: {
       const issueComments = await client.listIssueComments(repo, pr.number);
       for (const c of issueComments) {
         if (c.id <= lastIssue) continue;
+        if (firstPoll && !config.processExistingCommentsOnFirstRun) continue;
         if (isSelf(c.body, c.author)) continue;
         if (isBotAuthor(c.author)) continue;
         const key = commentKey(repo, pr.number, "issue", c.id);
@@ -110,7 +124,10 @@ export function githubPoller(args: {
           },
         });
       }
-      const maxIssue = issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue);
+      const maxIssue = issueComments.reduce(
+        (m, c) => Math.max(m, c.id),
+        lastIssue,
+      );
       state.setIssueCommentCursor(pr.number, maxIssue);
 
       // --- inline review comments ---
@@ -118,6 +135,7 @@ export function githubPoller(args: {
       const reviewComments = await client.listReviewComments(repo, pr.number);
       for (const c of reviewComments) {
         if (c.id <= lastReview) continue;
+        if (firstPoll && !config.processExistingCommentsOnFirstRun) continue;
         if (isSelf(c.body, c.author)) continue;
         const key = commentKey(repo, pr.number, "review", c.id);
         if (state.hasProcessedComment(key)) continue;
@@ -135,16 +153,28 @@ export function githubPoller(args: {
             body: c.body,
             createdAt: c.createdAt,
             reviewId: c.reviewId,
-            review: { path: c.path, line: c.line ?? c.originalLine, diffHunk: c.diffHunk },
+            review: {
+              path: c.path,
+              line: c.line ?? c.originalLine,
+              diffHunk: c.diffHunk,
+            },
           },
         });
       }
-      const maxReview = reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview);
+      const maxReview = reviewComments.reduce(
+        (m, c) => Math.max(m, c.id),
+        lastReview,
+      );
       state.setReviewCommentCursor(pr.number, maxReview);
     }
 
-    const windowMs = config.commentBatchWindowSec * 1000;
-    for (const payload of state.takeReadyCommentBatches(now, windowMs)) {
+    state.markPollingInitialized();
+
+    for (const payload of state.takeReadyCommentBatches(now, {
+      quietWindowMs: config.commentBatchWindowSec * 1000,
+      minComments: config.commentBatchMinComments,
+      maxWaitMs: config.commentBatchMaxWaitSec * 1000,
+    })) {
       events.push({
         kind: "pr_comment",
         id: payload.batchId,
@@ -157,7 +187,7 @@ export function githubPoller(args: {
   return {
     name: "github-pr-comments",
     async poll() {
-      const all: Event[] = [];
+      const all: Array<Event<PRCommentPayload>> = [];
       for (const repo of config.repos) {
         try {
           const events = await pollRepo(repo);

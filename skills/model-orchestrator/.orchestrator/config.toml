@@ -1,0 +1,36 @@
+[roles]
+director_broad = "fable-5"
+director_technical = "sol-5.6"
+implementer = "codex-medium"
+reviewer = "cursor-review"
+
+[models]
+fable-5 = "fable-5"
+sol-5.6 = "sol-5.6"
+codex-medium = "codex-medium"
+cursor-review = "cursor-review"
+
+# Add shell-safe provider templates here when CLIs are installed. Templates may
+# use {task_id}, {run_id}, {stage}, {model}, {input_file}, and {run_dir}.
+[providers]
+
+[routing]
+broad_or_ambiguous = "fable-5"
+technical_or_architectural = "sol-5.6"
+default_implementation = "codex-medium"
+independent_review = "cursor-review"
+
+[budgets]
+max_estimated_cost_usd = 5.00
+max_repair_cycles = 3
+max_stage_duration_minutes = 30
+
+[dashboard]
+port = 8765
+
+[artifacts]
+retain_raw = true
+
+[pricing.codex-medium]
+input_per_1m = 0.0
+output_per_1m = 0.0

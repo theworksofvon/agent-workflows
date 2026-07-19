@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Expand CI Validation Tiers
+
+Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Make pull-request validation comprehensive while keeping broader platform and dependency checks separate after merge.
+Message: Pull requests now run parallel quality, unit, integration, deterministic end-to-end, coverage, compiled-runtime, and Python checks; `main` adds Linux, macOS, and Windows validation plus scheduled production dependency audits.
+Added/Changed: Added ESLint and Prettier gates, Actionlint and ShellCheck validation, a clean-install setup test, a local HTTP/Git end-to-end workflow test, cross-platform Python discovery, seven focused PR jobs, and a three-platform main-branch matrix. The Node suite now contains 60 deterministic no-token tests and continues to require exact 100% line, branch, and function coverage for production TypeScript.
+Fixed/Removed: Preserved wrapped error causes, made GitHub API endpoints injectable for boundary testing, and removed the assumption that `python3` is the Python executable on every supported platform.
+Handoff: Verified locally with production and test typechecks, build, lint, formatting, script checks, all Node test tiers, compiled smoke tests, five Python tests, production dependency audit, ShellCheck, Actionlint, and diff validation; GitHub-hosted platform checks remain to run after the branch is pushed.
+
+### Adopt pnpm As Package Manager
+
+Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Migrate repository installation, development, testing, and CI workflows from npm to pnpm.
+Message: Clean installs and contributor commands now use a pinned pnpm 11 release and a pnpm-native lockfile.
+Added/Changed: Added `pnpm@11.15.0` package-manager metadata, `pnpm-lock.yaml`, an explicit dependency-build allowlist, Corepack bootstrap instructions, pnpm-aware setup and doctor scripts, pnpm CI setup and caching, and pnpm CLI examples throughout current documentation.
+Fixed/Removed: Removed `package-lock.json` and current npm command assumptions so local machines and GitHub Actions resolve dependencies through the same package manager; replaced the deprecated pnpm 11.12 CI installer path with the latest pnpm release; disambiguated repository setup and doctor scripts from pnpm's built-in commands.
+Handoff: Verify with `pnpm install --frozen-lockfile`, then run the authoritative pnpm typecheck, build, script, Node, smoke, and Python test commands.
+
+### Enforce Complete Runtime Coverage
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Turn the baseline test suite into comprehensive, coverage-gated CI without calling live GitHub or model services.
+Message: GitHub Actions now enforces strict source and test typechecking, a compiled CLI smoke test, Python orchestrator tests, and exact 100% line, branch, and function coverage for executable production TypeScript.
+Added/Changed: Expanded the Node suite from 24 to 58 tests across configuration, queues, persistence, daemon lifecycle, CLI routing, GitHub normalization, comment workflows, review workflows, adapters, and real temporary Git worktrees; added narrow typed injection seams and cross-platform path checks.
+Fixed/Removed: Prevents duplicate daemon timer chains after stop/restart, rejects unsafe managed-worktree paths on POSIX and Windows path flavors, removes coverage-only runtime constants, and replaces unsafe fake-Octokit casts with a structural API contract.
+Handoff: Verified with production and test typechecks, the production build, script checks, exact coverage thresholds, compiled CLI smoke tests, five Python tests, doctor, diff validation, and independent post-repair review.
+
+### Gate Comment Runs And Compile Production
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Keep immediate event delivery from creating one model run per comment and remove runtime TypeScript transpilation from production.
+Message: Comment groups now wait for a configurable count threshold or maximum age, and production runs compiled JavaScript under Node while development retains `tsx` watch mode.
+Added/Changed: Added two-comment/five-minute batch defaults, a 10-second quiet debounce, `npm run build`, source maps, setup/doctor build integration, and CI production-build validation.
+Fixed/Removed: Prevents bursty review feedback from causing one agent run per comment without leaving a lone comment pending forever; removes `tsx` from the production execution path.
+Handoff: Verify with the no-token test suite, `npm run build`, `npm run doctor`, and a compiled CLI startup smoke test.
+
+### Make Clean Installation Reproducible
+
+Date: 2026-07-18 CDT; Status: Completed; PR: Pending on `feat/pr-review-skill-adversarial`.
+Task: Turn machine-local setup assumptions into a documented, verifiable clean-install flow.
+Message: A new machine can install dependencies and shared skills with `npm run setup`, validate local requirements with `npm run doctor`, and start without replaying existing PR comments.
+Added/Changed: Pinned Node 24/npm 11, added cross-platform setup/doctor/skill installers, made Codex the explicit default, added safe first-poll cursor initialization, and rewrote the README around capabilities and clean installation.
+Fixed/Removed: Unknown adapters now fail instead of silently falling back to missing ZCode; existing comments are skipped on a new state directory unless explicitly enabled.
+Handoff: Verified with setup/doctor checks, TypeScript typechecking, the no-token test suite, and model-orchestrator Python tests.
+
 ### Document Current Runtime Behavior
 
 Date: 2026-07-05 18:07:00 CDT; Status: In Progress; PR: Pending on `codex/docs-current-behavior`.

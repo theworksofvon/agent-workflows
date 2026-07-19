@@ -1,5 +1,93 @@
 import { Octokit } from "octokit";
 
+interface PullRequestApiRecord {
+  number: number;
+  title: string;
+  body: string | null;
+  head: { ref: string };
+  base: { ref: string };
+  draft?: boolean | null;
+}
+
+interface IssueCommentApiRecord {
+  id: number;
+  user: { login?: string } | null;
+  body?: string | null;
+  created_at: string;
+}
+
+interface ReviewCommentApiRecord extends IssueCommentApiRecord {
+  path: string;
+  line?: number | null;
+  original_line?: number | null;
+  diff_hunk: string;
+  pull_request_review_id?: number | null;
+}
+
+interface PullRequestFileApiRecord {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+interface RepoRequest {
+  [key: string]: unknown;
+  owner: string;
+  repo: string;
+}
+
+interface PullRequestRequest extends RepoRequest {
+  pull_number: number;
+}
+
+type ListFilesMethod = (
+  args: PullRequestRequest & { per_page: number },
+) => Promise<{
+  data: PullRequestFileApiRecord[];
+}>;
+
+/** Minimal structural seam for the GitHub API operations consumed by this client. */
+export interface GitHubApi {
+  rest: {
+    pulls: {
+      list(
+        args: RepoRequest & { state: "open"; per_page: number },
+      ): Promise<{ data: PullRequestApiRecord[] }>;
+      listReviewComments(
+        args: PullRequestRequest & { per_page: number },
+      ): Promise<{ data: ReviewCommentApiRecord[] }>;
+      get(args: PullRequestRequest): Promise<{ data: PullRequestApiRecord }>;
+      listFiles: ListFilesMethod;
+      createReview(
+        args: PullRequestRequest & {
+          event: "COMMENT";
+          body: string;
+          comments: Array<{
+            path: string;
+            line: number;
+            side: "RIGHT";
+            body: string;
+          }>;
+        },
+      ): Promise<unknown>;
+    };
+    issues: {
+      listComments(
+        args: RepoRequest & { issue_number: number; per_page: number },
+      ): Promise<{ data: IssueCommentApiRecord[] }>;
+      createComment(
+        args: RepoRequest & { issue_number: number; body: string },
+      ): Promise<unknown>;
+    };
+  };
+  paginate(
+    method: ListFilesMethod,
+    args: PullRequestRequest & { per_page: number },
+  ): Promise<PullRequestFileApiRecord[]>;
+}
+
 /**
  * Marker tag embedded in every comment this daemon writes. The poller filters
  * these out so the agent never reacts to its own output. Chose an HTML comment
@@ -36,16 +124,18 @@ export interface PullRequestReviewComment {
 }
 
 export class GitHubClient {
-  readonly octokit: Octokit;
+  readonly octokit: GitHubApi;
 
-  constructor(token: string) {
-    this.octokit = new Octokit({ auth: token });
+  constructor(
+    token: string,
+    options: { octokit?: GitHubApi; baseUrl?: string } = {},
+  ) {
+    this.octokit =
+      options.octokit ?? new Octokit({ auth: token, baseUrl: options.baseUrl });
   }
 
   /** List open PRs for a repo. */
-  async listOpenPRs(ref: RepoRef): Promise<
-    PullRequestDetails[]
-  > {
+  async listOpenPRs(ref: RepoRef): Promise<PullRequestDetails[]> {
     const res = await this.octokit.rest.pulls.list({
       owner: ref.owner,
       repo: ref.repo,
@@ -67,7 +157,9 @@ export class GitHubClient {
     ref: RepoRef,
     prNumber: number,
     since?: number,
-  ): Promise<Array<{ id: number; author: string; body: string; createdAt: string }>> {
+  ): Promise<
+    Array<{ id: number; author: string; body: string; createdAt: string }>
+  > {
     const res = await this.octokit.rest.issues.listComments({
       owner: ref.owner,
       repo: ref.repo,
@@ -111,7 +203,6 @@ export class GitHubClient {
     return res.data
       .filter((c) => (since ? Number(new Date(c.created_at)) > since : true))
       .map((c) => {
-        const comment = c as typeof c & { pull_request_review_id?: number | null };
         return {
           id: c.id,
           author: c.user?.login ?? "unknown",
@@ -121,7 +212,7 @@ export class GitHubClient {
           originalLine: c.original_line ?? null,
           diffHunk: c.diff_hunk,
           createdAt: c.created_at,
-          reviewId: comment.pull_request_review_id ?? null,
+          reviewId: c.pull_request_review_id ?? null,
         };
       });
   }
@@ -139,7 +230,10 @@ export class GitHubClient {
     });
   }
 
-  async getPullRequest(ref: RepoRef, prNumber: number): Promise<PullRequestDetails> {
+  async getPullRequest(
+    ref: RepoRef,
+    prNumber: number,
+  ): Promise<PullRequestDetails> {
     const res = await this.octokit.rest.pulls.get({
       owner: ref.owner,
       repo: ref.repo,
@@ -155,13 +249,19 @@ export class GitHubClient {
     };
   }
 
-  async listPullRequestFiles(ref: RepoRef, prNumber: number): Promise<PullRequestFile[]> {
-    const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
-      owner: ref.owner,
-      repo: ref.repo,
-      pull_number: prNumber,
-      per_page: 100,
-    });
+  async listPullRequestFiles(
+    ref: RepoRef,
+    prNumber: number,
+  ): Promise<PullRequestFile[]> {
+    const files = await this.octokit.paginate(
+      this.octokit.rest.pulls.listFiles,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: prNumber,
+        per_page: 100,
+      },
+    );
     return files.map((file) => ({
       path: file.filename,
       status: file.status,

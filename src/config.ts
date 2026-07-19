@@ -7,17 +7,24 @@ export interface RepoSpec {
   repo: string;
 }
 
+export type ReviewAdversarialMode = "off" | "auto" | "always";
+
 export interface Config {
   githubToken: string;
   repos: RepoSpec[];
   pollIntervalSec: number;
   commentBatchWindowSec: number;
+  commentBatchMinComments: number;
+  commentBatchMaxWaitSec: number;
   prContextHistoryLimit: number;
   commentBatchHistoryLimit: number;
   processedCommentKeyLimit: number;
   agentRetryDelaySec: number;
   agentMaxAttempts: number;
   agent: string;
+  reviewAdversarialMode: ReviewAdversarialMode;
+  reviewAdversarialAgent: string;
+  processExistingCommentsOnFirstRun: boolean;
   agentSelfUser: string | null;
   stateDir: string;
   zcodeBin: string;
@@ -62,17 +69,38 @@ function parseRepos(raw: string): RepoSpec[] {
 export function loadConfig(options: LoadConfigOptions = {}): Config {
   const requireRepos = options.requireRepos ?? true;
   const rawRepos = process.env.REPOS?.trim() ?? "";
+  const agent = optional("AGENT", "codex");
+  const reviewAdversarialMode = optional("REVIEW_ADVERSARIAL_MODE", "auto");
+  if (!isReviewAdversarialMode(reviewAdversarialMode)) {
+    throw new Error(
+      "REVIEW_ADVERSARIAL_MODE must be one of: off, auto, always.",
+    );
+  }
   const cfg: Config = {
     githubToken: required("GITHUB_TOKEN"),
     repos: rawRepos === "" ? [] : parseRepos(rawRepos),
     pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
-    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "120")),
+    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "10")),
+    commentBatchMinComments: Number(
+      optional("COMMENT_BATCH_MIN_COMMENTS", "2"),
+    ),
+    commentBatchMaxWaitSec: Number(
+      optional("COMMENT_BATCH_MAX_WAIT_SEC", "300"),
+    ),
     prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
-    commentBatchHistoryLimit: Number(optional("COMMENT_BATCH_HISTORY_LIMIT", "20")),
-    processedCommentKeyLimit: Number(optional("PROCESSED_COMMENT_KEY_LIMIT", "2000")),
+    commentBatchHistoryLimit: Number(
+      optional("COMMENT_BATCH_HISTORY_LIMIT", "20"),
+    ),
+    processedCommentKeyLimit: Number(
+      optional("PROCESSED_COMMENT_KEY_LIMIT", "2000"),
+    ),
     agentRetryDelaySec: Number(optional("AGENT_RETRY_DELAY_SEC", "1800")),
     agentMaxAttempts: Number(optional("AGENT_MAX_ATTEMPTS", "5")),
-    agent: optional("AGENT", "zcode"),
+    agent,
+    reviewAdversarialMode,
+    reviewAdversarialAgent: optional("REVIEW_ADVERSARIAL_AGENT", agent),
+    processExistingCommentsOnFirstRun:
+      optional("PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN", "false") === "true",
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
@@ -84,16 +112,40 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   if (!Number.isFinite(cfg.pollIntervalSec) || cfg.pollIntervalSec < 5) {
     throw new Error("POLL_INTERVAL_SEC must be a number >= 5.");
   }
-  if (!Number.isFinite(cfg.commentBatchWindowSec) || cfg.commentBatchWindowSec < 0) {
+  if (
+    !Number.isFinite(cfg.commentBatchWindowSec) ||
+    cfg.commentBatchWindowSec < 0
+  ) {
     throw new Error("COMMENT_BATCH_WINDOW_SEC must be a number >= 0.");
   }
-  if (!Number.isInteger(cfg.prContextHistoryLimit) || cfg.prContextHistoryLimit < 0) {
+  if (
+    !Number.isInteger(cfg.commentBatchMinComments) ||
+    cfg.commentBatchMinComments < 1
+  ) {
+    throw new Error("COMMENT_BATCH_MIN_COMMENTS must be an integer >= 1.");
+  }
+  if (
+    !Number.isFinite(cfg.commentBatchMaxWaitSec) ||
+    cfg.commentBatchMaxWaitSec < 0
+  ) {
+    throw new Error("COMMENT_BATCH_MAX_WAIT_SEC must be a number >= 0.");
+  }
+  if (
+    !Number.isInteger(cfg.prContextHistoryLimit) ||
+    cfg.prContextHistoryLimit < 0
+  ) {
     throw new Error("PR_CONTEXT_HISTORY_LIMIT must be an integer >= 0.");
   }
-  if (!Number.isInteger(cfg.commentBatchHistoryLimit) || cfg.commentBatchHistoryLimit < 0) {
+  if (
+    !Number.isInteger(cfg.commentBatchHistoryLimit) ||
+    cfg.commentBatchHistoryLimit < 0
+  ) {
     throw new Error("COMMENT_BATCH_HISTORY_LIMIT must be an integer >= 0.");
   }
-  if (!Number.isInteger(cfg.processedCommentKeyLimit) || cfg.processedCommentKeyLimit < 0) {
+  if (
+    !Number.isInteger(cfg.processedCommentKeyLimit) ||
+    cfg.processedCommentKeyLimit < 0
+  ) {
     throw new Error("PROCESSED_COMMENT_KEY_LIMIT must be an integer >= 0.");
   }
   if (!Number.isFinite(cfg.agentRetryDelaySec) || cfg.agentRetryDelaySec < 0) {
@@ -109,12 +161,23 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   log.info("config loaded", {
     repos: cfg.repos.map((r) => `${r.owner}/${r.repo}`),
     agent: cfg.agent,
+    reviewAdversarialMode: cfg.reviewAdversarialMode,
+    reviewAdversarialAgent: cfg.reviewAdversarialAgent,
+    processExistingCommentsOnFirstRun: cfg.processExistingCommentsOnFirstRun,
     pollIntervalSec: cfg.pollIntervalSec,
     commentBatchWindowSec: cfg.commentBatchWindowSec,
+    commentBatchMinComments: cfg.commentBatchMinComments,
+    commentBatchMaxWaitSec: cfg.commentBatchMaxWaitSec,
     prContextHistoryLimit: cfg.prContextHistoryLimit,
     agentRetryDelaySec: cfg.agentRetryDelaySec,
     agentMaxAttempts: cfg.agentMaxAttempts,
     stateDir: cfg.stateDir,
   });
   return cfg;
+}
+
+function isReviewAdversarialMode(
+  value: string,
+): value is ReviewAdversarialMode {
+  return value === "off" || value === "auto" || value === "always";
 }

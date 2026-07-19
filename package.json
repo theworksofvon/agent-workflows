@@ -4,20 +4,44 @@
   "private": true,
   "description": "Local daemon that bridges signals (PR comments, etc.) to pluggable coding agents.",
   "type": "module",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=11 <12"
+  },
+  "packageManager": "pnpm@11.15.0",
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "skills:install": "node scripts/install-shared-skills.mjs",
+    "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs && node --check scripts/install-shared-skills.mjs && node --check scripts/test-python.mjs",
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "review": "tsx src/index.ts review",
-    "test": "node --import tsx --test tests/**/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/index.js",
+    "review": "node --enable-source-maps dist/index.js review",
+    "test": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 tests/agent-adapters.test.ts tests/core.test.ts tests/e2e.test.ts tests/github-poller.test.ts tests/github-state.test.ts tests/pr-comment.test.ts tests/pr-review.test.ts tests/setup.integration.test.ts tests/worktree.test.ts",
+    "test:unit": "node --import tsx --test tests/core.test.ts tests/github-state.test.ts",
+    "test:integration": "node --import tsx --test tests/agent-adapters.test.ts tests/github-poller.test.ts tests/pr-comment.test.ts tests/pr-review.test.ts tests/setup.integration.test.ts tests/worktree.test.ts",
+    "test:e2e": "node --import tsx --test tests/e2e.test.ts",
+    "test:smoke": "node dist/index.js --help && node dist/index.js help && node dist/index.js review --help",
+    "test:python": "node scripts/test-python.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:typecheck": "tsc --project tsconfig.tests.json",
+    "lint": "eslint src tests scripts eslint.config.js",
+    "format": "prettier --write src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs",
+    "format:check": "prettier --check src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "octokit": "^4.0.3"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "^22.20.0",
+    "eslint": "10.7.0",
+    "globals": "17.7.0",
+    "prettier": "3.9.5",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "typescript-eslint": "8.64.0"
   }
 }

@@ -28,6 +28,7 @@ export interface GitHubPullRequestState {
 }
 
 export interface GitHubRepoState {
+  pollingInitialized: boolean;
   cursors: GitHubRepoCursors;
   pendingCommentGroups: Record<string, PendingCommentGroup>;
   processedCommentKeys: string[];
@@ -53,6 +54,7 @@ export interface PRReviewRunHistory {
 }
 
 const defaultState = (): GitHubRepoState => ({
+  pollingInitialized: false,
   cursors: {
     issueCommentId: 0,
     reviewCommentId: 0,
@@ -96,6 +98,16 @@ export class GitHubRepoStateStore {
     });
   }
 
+  isPollingInitialized(): boolean {
+    return this.state.pollingInitialized;
+  }
+
+  markPollingInitialized(): void {
+    if (this.state.pollingInitialized) return;
+    this.state.pollingInitialized = true;
+    this.persist();
+  }
+
   getIssueCommentCursor(prNumber: number): number {
     return this.getPrState(prNumber).cursors.issueCommentId;
   }
@@ -137,7 +149,9 @@ export class GitHubRepoStateStore {
       prBody: pr.body,
       headRef: pr.headRef,
       baseRef: pr.baseRef,
-      batchId: existing?.batchId ?? `batch:${this.repo.owner}/${this.repo.repo}:${groupKey}:${now}`,
+      batchId:
+        existing?.batchId ??
+        `batch:${this.repo.owner}/${this.repo.repo}:${groupKey}:${now}`,
       groupKey,
       firstSeenAt: new Date(firstSeenAtMs).toISOString(),
       lastSeenAt: new Date(now).toISOString(),
@@ -147,18 +161,33 @@ export class GitHubRepoStateStore {
       retryAfterMs: existing?.retryAfterMs,
       lastError: existing?.lastError,
       comments: [...comments, comment].sort((a, b) => {
-        const byTime = Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
+        const byTime =
+          Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
         return byTime === 0 ? a.id - b.id : byTime;
       }),
     };
     this.persist();
   }
 
-  takeReadyCommentBatches(now: number, windowMs: number): PRCommentPayload[] {
+  takeReadyCommentBatches(
+    now: number,
+    policy: {
+      quietWindowMs: number;
+      minComments: number;
+      maxWaitMs: number;
+    },
+  ): PRCommentPayload[] {
     const ready: PRCommentPayload[] = [];
-    for (const [groupKey, group] of Object.entries(this.state.pendingCommentGroups)) {
-      if (group.retryAfterMs !== undefined && now < group.retryAfterMs) continue;
-      if (now - group.lastSeenAtMs < windowMs) continue;
+    for (const [groupKey, group] of Object.entries(
+      this.state.pendingCommentGroups,
+    )) {
+      if (group.retryAfterMs !== undefined && now < group.retryAfterMs)
+        continue;
+      if (now - group.lastSeenAtMs < policy.quietWindowMs) continue;
+      const thresholdReached = group.comments.length >= policy.minComments;
+      const maximumWaitReached =
+        policy.maxWaitMs > 0 && now - group.firstSeenAtMs >= policy.maxWaitMs;
+      if (!thresholdReached && !maximumWaitReached) continue;
       group.attempts += 1;
       group.retryAfterMs = undefined;
       group.lastError = undefined;
@@ -269,7 +298,9 @@ export class GitHubRepoStateStore {
 
   private load(): void {
     if (!existsSync(this.file)) {
-      log.debug("no github repo state file yet, starting fresh", { file: this.file });
+      log.debug("no github repo state file yet, starting fresh", {
+        file: this.file,
+      });
       return;
     }
     try {
@@ -308,11 +339,15 @@ function normalizeState(raw: unknown): GitHubRepoState {
   const state = raw as Partial<GitHubRepoState>;
   const prs: Record<string, GitHubPullRequestState> = {};
   for (const [prNumber, prState] of Object.entries(state.prs ?? {})) {
-    const inferredCursors = inferCursorsFromHistory(prState.commentBatchHistory ?? []);
+    const inferredCursors = inferCursorsFromHistory(
+      prState.commentBatchHistory ?? [],
+    );
     prs[prNumber] = {
       cursors: {
-        issueCommentId: prState.cursors?.issueCommentId ?? inferredCursors.issueCommentId,
-        reviewCommentId: prState.cursors?.reviewCommentId ?? inferredCursors.reviewCommentId,
+        issueCommentId:
+          prState.cursors?.issueCommentId ?? inferredCursors.issueCommentId,
+        reviewCommentId:
+          prState.cursors?.reviewCommentId ?? inferredCursors.reviewCommentId,
       },
       commentBatchHistory: prState.commentBatchHistory ?? [],
       reviewRunHistory: prState.reviewRunHistory ?? [],
@@ -320,6 +355,9 @@ function normalizeState(raw: unknown): GitHubRepoState {
     };
   }
   return {
+    // State files created before this field existed were already live, so they
+    // must not be treated as a brand-new installation and replay old comments.
+    pollingInitialized: state.pollingInitialized ?? true,
     cursors: {
       issueCommentId: state.cursors?.issueCommentId ?? 0,
       reviewCommentId: state.cursors?.reviewCommentId ?? 0,
@@ -330,7 +368,9 @@ function normalizeState(raw: unknown): GitHubRepoState {
   };
 }
 
-function inferCursorsFromHistory(history: PRCommentBatchHistory[]): GitHubRepoCursors {
+function inferCursorsFromHistory(
+  history: PRCommentBatchHistory[],
+): GitHubRepoCursors {
   const cursors = { issueCommentId: 0, reviewCommentId: 0 };
   for (const entry of history) {
     for (const key of entry.commentKeys) {

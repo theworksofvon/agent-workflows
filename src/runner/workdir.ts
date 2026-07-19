@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import path, { join, resolve } from "node:path";
 import { log } from "../log.js";
 
 export interface WorkdirHandle {
@@ -53,13 +53,11 @@ export function prepareWorkdir(args: {
   const worktreeBase = join(stateRoot, "worktrees", safeOwner, safeRepo);
   mkdirSync(worktreeBase, { recursive: true });
   const dir = mkdtempSync(join(worktreeBase, `${safeTask}-`));
-  const cloneUrl =
-    args.cloneUrlOverride ??
-    `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}`;
+  const cloneUrl = resolveCloneUrl(repo, token, args.cloneUrlOverride);
   const localBranch = `agent-workflows/${safeTask}-${Date.now()}`;
 
   try {
-    ensureInside(dir, worktreeBase);
+    assertInsideManagedRoot(dir, worktreeBase);
     ensureRepoCache({ repoCachePath, cloneUrl, branch });
     const baseSha = git(["rev-parse", `refs/remotes/origin/${branch}`], {
       cwd: repoCachePath,
@@ -70,12 +68,17 @@ export function prepareWorkdir(args: {
     });
     // Ensure git identity is set for commits the agent makes.
     git(["config", "user.name", "agent-workflows"], { cwd: dir });
-    git(["config", "user.email", "agent-workflows@users.noreply.github.com"], { cwd: dir });
+    git(["config", "user.email", "agent-workflows@users.noreply.github.com"], {
+      cwd: dir,
+    });
     return { path: dir, branch, localBranch, baseSha, repoCachePath };
   } catch (err) {
     // Clean up a half-made worktree so we don't leave junk.
     cleanupPath(dir, worktreeBase);
-    throw new Error(`Failed to prepare worktree for ${repo.owner}/${repo.repo}:${branch}: ${String(err)}`);
+    throw new Error(
+      `Failed to prepare worktree for ${repo.owner}/${repo.repo}:${branch}: ${String(err)}`,
+      { cause: err },
+    );
   }
 }
 
@@ -85,10 +88,18 @@ export function cleanupWorkdir(handle: WorkdirHandle, keep: boolean): void {
     log.debug("keeping worktree for debugging", { path: handle.path });
     return;
   }
-  const worktreeRoot = resolve(handle.repoCachePath, "..", "..", "..", "worktrees");
-  ensureInside(handle.path, worktreeRoot);
+  const worktreeRoot = resolve(
+    handle.repoCachePath,
+    "..",
+    "..",
+    "..",
+    "worktrees",
+  );
+  assertInsideManagedRoot(handle.path, worktreeRoot);
   try {
-    git(["worktree", "remove", "--force", handle.path], { cwd: handle.repoCachePath });
+    git(["worktree", "remove", "--force", handle.path], {
+      cwd: handle.repoCachePath,
+    });
     git(["worktree", "prune"], { cwd: handle.repoCachePath });
     deleteLocalBranch(handle);
   } catch (err) {
@@ -122,30 +133,66 @@ function ensureRepoCache(args: {
   if (!existsSync(repoCachePath)) {
     mkdirSync(resolve(repoCachePath, ".."), { recursive: true });
     log.info("creating cached bare repo", { repoCachePath });
-    git(["clone", "--bare", cloneUrl, repoCachePath], { cwd: resolve(repoCachePath, "..") });
+    git(["clone", "--bare", cloneUrl, repoCachePath], {
+      cwd: resolve(repoCachePath, ".."),
+    });
   } else {
     git(["remote", "set-url", "origin", cloneUrl], { cwd: repoCachePath });
   }
-  git(["fetch", "--prune", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
-    cwd: repoCachePath,
-  });
+  git(
+    [
+      "fetch",
+      "--prune",
+      "origin",
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ],
+    {
+      cwd: repoCachePath,
+    },
+  );
 }
 
 function safePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "task";
 }
 
-function ensureInside(path: string, root: string): void {
-  const resolvedPath = resolve(path);
-  const resolvedRoot = resolve(root);
-  const rel = relative(resolvedRoot, resolvedPath);
-  if (rel.startsWith("..") || rel === "" || resolve(resolvedRoot, rel) !== resolvedPath) {
-    throw new Error(`Refusing to operate outside managed worktree root: ${resolvedPath}`);
+export function resolveCloneUrl(
+  repo: { owner: string; repo: string },
+  token: string,
+  override?: string,
+): string {
+  return (
+    override ??
+    `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}`
+  );
+}
+
+export function assertInsideManagedRoot(
+  candidatePath: string,
+  root: string,
+  pathFlavor: Pick<
+    typeof path,
+    "isAbsolute" | "relative" | "resolve" | "sep"
+  > = path,
+): void {
+  const resolvedPath = pathFlavor.resolve(candidatePath);
+  const resolvedRoot = pathFlavor.resolve(root);
+  const rel = pathFlavor.relative(resolvedRoot, resolvedPath);
+  const unsafe = [
+    rel === "",
+    rel === "..",
+    rel.startsWith(`..${pathFlavor.sep}`),
+    pathFlavor.isAbsolute(rel),
+  ].includes(true);
+  if (unsafe) {
+    throw new Error(
+      `Refusing to operate outside managed worktree root: ${resolvedPath}`,
+    );
   }
 }
 
 function cleanupPath(path: string, root: string): void {
   if (!existsSync(path)) return;
-  ensureInside(path, root);
+  assertInsideManagedRoot(path, root);
   rmSync(path, { recursive: true, force: true });
 }
