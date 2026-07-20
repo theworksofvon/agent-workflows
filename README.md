@@ -236,11 +236,11 @@ GitHub credentials.
 Pull requests run seven parallel jobs covering quality and type safety, unit
 tests, integration tests, deterministic end-to-end behavior, complete coverage,
 the compiled runtime, and the Python orchestrator. Pushes to `main`, manual
-runs, and the weekly schedule add Linux, macOS, and Windows validation plus a
-production dependency audit. Keep the pull-request jobs as required branch
-protection checks; the `main` workflow is a broader post-merge safety net.
-`doctor` remains the machine-specific check for local credentials, binaries,
-and skill links.
+runs, and the weekly schedule add Linux and macOS validation plus a production
+dependency audit. Windows is not a supported CI target. Keep the pull-request
+jobs as required branch protection checks; the `main` workflow is a broader
+post-merge safety net. `doctor` remains the machine-specific check for local
+credentials, binaries, and skill links.
 
 The extension seams are intentionally small:
 

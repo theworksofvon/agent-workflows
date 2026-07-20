@@ -43,7 +43,7 @@ test("clean setup builds production output and links every portable skill", () =
     symlinkSync(
       join(repoRoot, "node_modules"),
       join(checkout, "node_modules"),
-      process.platform === "win32" ? "junction" : "dir",
+      "dir",
     );
 
     const first = runSetup(checkout, testHome);
@@ -86,7 +86,6 @@ function runSetup(checkout: string, testHome: string) {
       env: {
         ...process.env,
         HOME: testHome,
-        USERPROFILE: testHome,
       },
     },
   );
