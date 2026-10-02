@@ -5,8 +5,14 @@ import type {
   BatchHistory,
   Comment,
   CommentBatch,
+  PullRequest,
 } from "../../domain/events.js";
 import { log } from "../../log.js";
+import type {
+  RepoStatePort,
+  ReviewRunHistory,
+  StateFactory,
+} from "./state.interface.js";
 
 export interface GitHubRepoCursors {
   issueCommentId: number;
@@ -32,26 +38,12 @@ export interface GitHubRepoState {
   cursors: GitHubRepoCursors;
   pendingCommentGroups: Record<string, PendingCommentGroup>;
   processedCommentKeys: string[];
+  seenDeliveryIds: string[];
   prs: Record<string, GitHubPullRequestState>;
 }
 
-export interface PullRequestSnapshot {
-  number: number;
-  title: string;
-  body: string | null;
-  headRef: string;
-  baseRef: string;
-  draft?: boolean;
-}
-
-export interface PRReviewRunHistory {
-  reviewedAt: string;
-  agent: string;
-  findingCount: number;
-  postedFindingCount: number;
-  dryRun: boolean;
-  summary: string;
-}
+/** Kept so existing importers compile; the type now lives with the port. */
+export type PRReviewRunHistory = ReviewRunHistory;
 
 const defaultState = (): GitHubRepoState => ({
   pollingInitialized: false,
@@ -61,6 +53,7 @@ const defaultState = (): GitHubRepoState => ({
   },
   pendingCommentGroups: {},
   processedCommentKeys: [],
+  seenDeliveryIds: [],
   prs: {},
 });
 
@@ -73,7 +66,7 @@ const defaultState = (): GitHubRepoState => ({
  * This keeps polling and prompt-context lookups scoped to one repo instead of
  * growing a shared process-wide JSON document.
  */
-export class GitHubRepoStateStore {
+export class GitHubRepoStateStore implements RepoStatePort {
   private state: GitHubRepoState = defaultState();
   private readonly file: string;
 
@@ -132,7 +125,7 @@ export class GitHubRepoStateStore {
 
   addPendingComment(args: {
     groupKey: string;
-    pr: PullRequestSnapshot;
+    pr: PullRequest;
     comment: Comment;
     now: number;
   }): void {
@@ -277,6 +270,19 @@ export class GitHubRepoStateStore {
     this.persist();
   }
 
+  hasSeenDelivery(id: string): boolean {
+    return this.state.seenDeliveryIds.includes(id);
+  }
+
+  markDeliverySeen(id: string): void {
+    if (this.state.seenDeliveryIds.includes(id)) return;
+    this.state.seenDeliveryIds = takeLatest(
+      [...this.state.seenDeliveryIds, id],
+      this.limits.processedCommentKeyLimit,
+    );
+    this.persist();
+  }
+
   private getPrState(prNumber: number): GitHubPullRequestState {
     const key = String(prNumber);
     const prState = this.state.prs[key] ?? defaultPullRequestState();
@@ -364,6 +370,7 @@ function normalizeState(raw: unknown): GitHubRepoState {
     },
     pendingCommentGroups: state.pendingCommentGroups ?? {},
     processedCommentKeys: state.processedCommentKeys ?? [],
+    seenDeliveryIds: state.seenDeliveryIds ?? [],
     prs,
   };
 }
@@ -384,3 +391,8 @@ function inferCursorsFromHistory(history: BatchHistory[]): GitHubRepoCursors {
   }
   return cursors;
 }
+
+export const jsonFileState =
+  (config: Config): StateFactory =>
+  (repo) =>
+    GitHubRepoStateStore.fromConfig(config, repo);

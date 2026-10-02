@@ -28,11 +28,14 @@ test("ready batches are not marked processed until completed", () => {
       groupKey: "pr:1:review:10",
       now: 1_000,
       pr: {
+        repo: { owner: "local-owner", repo: "sample-repo" },
         number: 1,
         title: "Test PR",
         body: null,
         headRef: "feature/test",
         baseRef: "main",
+        draft: false,
+        fromFork: false,
       },
       comment: {
         key: "local-owner/sample-repo#1:review:100",
@@ -69,11 +72,14 @@ test("retryable failures pause and later re-emit the batch", () => {
       groupKey: "pr:1:review:10",
       now: 1_000,
       pr: {
+        repo: { owner: "local-owner", repo: "sample-repo" },
         number: 1,
         title: "Test PR",
         body: null,
         headRef: "feature/test",
         baseRef: "main",
+        draft: false,
+        fromFork: false,
       },
       comment: {
         key: "local-owner/sample-repo#1:review:100",
@@ -99,11 +105,14 @@ test("retryable failures pause and later re-emit the batch", () => {
       groupKey: "pr:1:review:10",
       now: 3_000,
       pr: {
+        repo: { owner: "local-owner", repo: "sample-repo" },
         number: 1,
         title: "Updated title",
         body: "body",
         headRef: "feature/test",
         baseRef: "main",
+        draft: false,
+        fromFork: false,
       },
       comment: {
         key: "local-owner/sample-repo#1:review:101",
@@ -141,11 +150,14 @@ test("comment batches wait for a count threshold or maximum age", () => {
     const state = makeState(root);
     const policy = { quietWindowMs: 0, minComments: 2, maxWaitMs: 5_000 };
     const pr = {
+      repo: { owner: "local-owner", repo: "sample-repo" },
       number: 1,
       title: "Test PR",
       body: null,
       headRef: "feature/test",
       baseRef: "main",
+      draft: false,
+      fromFork: false,
     };
 
     state.addPendingComment({
@@ -234,11 +246,14 @@ test("state persists initialization, ordered pending comments, duplicate guards,
     state.markPollingInitialized();
     assert.equal(state.isPollingInitialized(), true);
     const pr = {
+      repo: { owner: "local-owner", repo: "sample-repo" },
       number: 1,
       title: "PR",
       body: "body",
       headRef: "head",
       baseRef: "base",
+      draft: false,
+      fromFork: false,
     };
     const add = (key: string, id: number, createdAt: number, now: number) =>
       state.addPendingComment({

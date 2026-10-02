@@ -354,9 +354,8 @@ test("SerialQueue preserves order, exposes queued size, and recovers after rejec
   assert.equal(order.at(-1), "fourth");
 });
 
-test("GitHubClient normalizes responses and sends exact Octokit arguments", async () => {
-  const calls: Array<[string, unknown]> = [];
-  const fake: GitHubApi = {
+function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
+  return {
     rest: {
       pulls: {
         list: async (args: unknown) => {
@@ -428,6 +427,9 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
         createReview: async (args: unknown) => {
           calls.push(["create-review", args]);
         },
+        createReplyForReviewComment: async (args: unknown) => {
+          calls.push(["reply", args]);
+        },
       },
       issues: {
         listComments: async (args: unknown) => {
@@ -453,6 +455,58 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
           calls.push(["create-comment", args]);
         },
       },
+      repos: {
+        listWebhooks: async (args: unknown) => {
+          calls.push(["list-hooks", args]);
+          return {
+            data: [
+              {
+                id: 1,
+                events: ["issue_comment"],
+                active: true,
+                config: { url: "https://x.test/hook" },
+              },
+              { id: 2, events: [], active: false },
+            ],
+          };
+        },
+        createWebhook: async (args: unknown) => {
+          calls.push(["create-hook", args]);
+          return {
+            data: {
+              id: 3,
+              events: ["pull_request"],
+              active: true,
+              config: { url: "https://x.test/new" },
+            },
+          };
+        },
+        updateWebhook: async (args: unknown) => {
+          calls.push(["update-hook", args]);
+          return {
+            data: {
+              id: 3,
+              events: ["pull_request"],
+              active: true,
+              config: { url: "https://x.test/new" },
+            },
+          };
+        },
+        listWebhookDeliveries: async (args: unknown) => {
+          calls.push(["hook-deliveries", args]);
+          return {
+            data: [
+              {
+                id: 10,
+                event: "ping",
+                status_code: 200,
+                delivered_at: "2021-01-01T00:00:00Z",
+                redelivery: false,
+              },
+            ],
+          };
+        },
+      },
     },
     paginate: async (_method: unknown, args: unknown) => {
       calls.push(["files", args]);
@@ -474,11 +528,17 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
       ];
     },
   };
+}
+
+test("GitHubClient normalizes responses and sends exact Octokit arguments", async () => {
+  const calls: Array<[string, unknown]> = [];
+  const fake = fakeGitHub(calls);
   const client = new GitHubClient("unused", { octokit: fake });
   const ref = { owner: "owner", repo: "repo" };
   assert.equal(MARKER_TAG, "<!-- agent-workflows:bot -->");
   assert.deepEqual(await client.listOpenPRs(ref), [
     {
+      repo: ref,
       number: 1,
       title: "One",
       body: null,
@@ -488,6 +548,7 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
       fromFork: false,
     },
     {
+      repo: ref,
       number: 2,
       title: "Two",
       body: "body",
@@ -498,17 +559,12 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     },
   ]);
   assert.equal((await client.listIssueComments(ref, 3)).length, 2);
-  assert.deepEqual(
-    await client.listIssueComments(ref, 3, Date.parse("2020-06-01")),
-    [
-      {
-        id: 2,
-        author: "author",
-        body: "hello",
-        createdAt: "2021-01-01T00:00:00Z",
-      },
-    ],
-  );
+  assert.deepEqual((await client.listIssueComments(ref, 3))[1], {
+    id: 2,
+    author: "author",
+    body: "hello",
+    createdAt: "2021-01-01T00:00:00Z",
+  });
   const allReviews = await client.listReviewComments(ref, 3);
   assert.deepEqual(allReviews[0], {
     id: 3,
@@ -521,13 +577,10 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     createdAt: "2020-01-01T00:00:00Z",
     reviewId: null,
   });
-  assert.equal(
-    (await client.listReviewComments(ref, 3, Date.parse("2020-06-01")))[0]
-      .reviewId,
-    9,
-  );
+  assert.equal(allReviews[1].reviewId, 9);
   await client.createComment(ref, 3, "body");
   assert.deepEqual(await client.getPullRequest(ref, 5), {
+    repo: ref,
     number: 5,
     title: "PR",
     body: null,
@@ -547,7 +600,7 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     { path: "b.ts", status: "added", additions: 1, deletions: 0, patch: "+x" },
   ]);
   await client.createPullRequestReview({
-    ref,
+    repo: ref,
     prNumber: 5,
     body: "summary",
     comments: [{ path: "a.ts", line: 2, body: "finding" }],
@@ -573,6 +626,81 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     comments: [{ path: "a.ts", line: 2, side: "RIGHT", body: "finding" }],
   });
   assert.ok(new GitHubClient("token").octokit);
+});
+
+test("github client passes review replies and webhook operations through", async () => {
+  const calls: Array<[string, unknown]> = [];
+  const github = fakeGitHub(calls);
+  const client = new GitHubClient("unused", { octokit: github });
+  const ref = { owner: "owner", repo: "repo" };
+  const hookArgs = { url: "https://x.test/new", secret: "s", events: ["a"] };
+  const hookBody = {
+    events: ["a"],
+    active: true,
+    config: { url: "https://x.test/new", content_type: "json", secret: "s" },
+  };
+  const argsFor = (name: string) => calls.find(([n]) => n === name)?.[1];
+
+  await client.replyToReviewComment(ref, 5, 77, "thanks");
+  assert.deepEqual(argsFor("reply"), {
+    owner: "owner",
+    repo: "repo",
+    pull_number: 5,
+    comment_id: 77,
+    body: "thanks",
+  });
+
+  assert.deepEqual(await client.listHooks(ref), [
+    {
+      id: 1,
+      url: "https://x.test/hook",
+      events: ["issue_comment"],
+      active: true,
+    },
+    { id: 2, url: "", events: [], active: false },
+  ]);
+  assert.deepEqual(argsFor("list-hooks"), {
+    owner: "owner",
+    repo: "repo",
+    per_page: 100,
+  });
+
+  const created = await client.createHook(ref, hookArgs);
+  assert.deepEqual(created, {
+    id: 3,
+    url: "https://x.test/new",
+    events: ["pull_request"],
+    active: true,
+  });
+  assert.deepEqual(argsFor("create-hook"), {
+    owner: "owner",
+    repo: "repo",
+    ...hookBody,
+  });
+
+  await client.updateHook(ref, 3, hookArgs);
+  assert.deepEqual(argsFor("update-hook"), {
+    owner: "owner",
+    repo: "repo",
+    hook_id: 3,
+    ...hookBody,
+  });
+
+  assert.deepEqual(await client.listHookDeliveries(ref, 3), [
+    {
+      id: 10,
+      event: "ping",
+      statusCode: 200,
+      deliveredAt: "2021-01-01T00:00:00Z",
+      redelivery: false,
+    },
+  ]);
+  assert.deepEqual(argsFor("hook-deliveries"), {
+    owner: "owner",
+    repo: "repo",
+    hook_id: 3,
+    per_page: 30,
+  });
 });
 
 test("agent registry routes known entries and rejects unknown agents", () => {

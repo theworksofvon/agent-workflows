@@ -1,5 +1,17 @@
 import { Octokit } from "octokit";
-import type { PullRequestFile, RepoRef } from "../../domain/events.js";
+import type {
+  PullRequest,
+  PullRequestFile,
+  RepoRef,
+} from "../../domain/events.js";
+import type {
+  GitHubPort,
+  HookDelivery,
+  HookRecord,
+  IssueCommentRecord,
+  ReviewCommentDraft,
+  ReviewCommentRecord,
+} from "./github.interface.js";
 
 interface PullRequestApiRecord {
   number: number;
@@ -31,6 +43,27 @@ interface PullRequestFileApiRecord {
   additions: number;
   deletions: number;
   patch?: string;
+}
+
+interface HookApiRecord {
+  id: number;
+  events: string[];
+  active: boolean;
+  config?: { url?: string };
+}
+
+interface HookDeliveryApiRecord {
+  id: number;
+  event: string;
+  status_code: number;
+  delivered_at: string;
+  redelivery: boolean;
+}
+
+interface HookConfigRequest {
+  events: string[];
+  active: boolean;
+  config: { url: string; content_type: "json"; secret: string };
 }
 
 interface RepoRequest {
@@ -73,6 +106,23 @@ export interface GitHubApi {
           }>;
         },
       ): Promise<unknown>;
+      createReplyForReviewComment(
+        args: PullRequestRequest & { comment_id: number; body: string },
+      ): Promise<unknown>;
+    };
+    repos: {
+      listWebhooks(
+        args: RepoRequest & { per_page: number },
+      ): Promise<{ data: HookApiRecord[] }>;
+      createWebhook(
+        args: RepoRequest & HookConfigRequest,
+      ): Promise<{ data: HookApiRecord }>;
+      updateWebhook(
+        args: RepoRequest & HookConfigRequest & { hook_id: number },
+      ): Promise<{ data: HookApiRecord }>;
+      listWebhookDeliveries(
+        args: RepoRequest & { hook_id: number; per_page: number },
+      ): Promise<{ data: HookDeliveryApiRecord[] }>;
     };
     issues: {
       listComments(
@@ -96,23 +146,7 @@ export interface GitHubApi {
  */
 export const MARKER_TAG = "<!-- agent-workflows:bot -->";
 
-export interface PullRequestDetails {
-  number: number;
-  title: string;
-  body: string | null;
-  headRef: string;
-  baseRef: string;
-  draft: boolean;
-  fromFork: boolean;
-}
-
-export interface PullRequestReviewComment {
-  path: string;
-  line: number;
-  body: string;
-}
-
-export class GitHubClient {
+export class GitHubClient implements GitHubPort {
   readonly octokit: GitHubApi;
 
   constructor(
@@ -124,7 +158,7 @@ export class GitHubClient {
   }
 
   /** List open PRs for a repo. */
-  async listOpenPRs(ref: RepoRef): Promise<PullRequestDetails[]> {
+  async listOpenPRs(ref: RepoRef): Promise<PullRequest[]> {
     const res = await this.octokit.rest.pulls.list({
       owner: ref.owner,
       repo: ref.repo,
@@ -132,6 +166,7 @@ export class GitHubClient {
       per_page: 100,
     });
     return res.data.map((p) => ({
+      repo: ref,
       number: p.number,
       title: p.title,
       body: p.body,
@@ -146,65 +181,43 @@ export class GitHubClient {
   async listIssueComments(
     ref: RepoRef,
     prNumber: number,
-    since?: number,
-  ): Promise<
-    Array<{ id: number; author: string; body: string; createdAt: string }>
-  > {
+  ): Promise<IssueCommentRecord[]> {
     const res = await this.octokit.rest.issues.listComments({
       owner: ref.owner,
       repo: ref.repo,
       issue_number: prNumber,
       per_page: 100,
     });
-    return res.data
-      .filter((c) => (since ? Number(new Date(c.created_at)) > since : true))
-      .map((c) => ({
-        id: c.id,
-        author: c.user?.login ?? "unknown",
-        body: c.body ?? "",
-        createdAt: c.created_at,
-      }));
+    return res.data.map((c) => ({
+      id: c.id,
+      author: c.user?.login ?? "unknown",
+      body: c.body ?? "",
+      createdAt: c.created_at,
+    }));
   }
 
   /** Inline review comments on a PR, newest last. */
   async listReviewComments(
     ref: RepoRef,
     prNumber: number,
-    since?: number,
-  ): Promise<
-    Array<{
-      id: number;
-      author: string;
-      body: string;
-      path: string;
-      line: number | null;
-      originalLine: number | null;
-      diffHunk: string;
-      createdAt: string;
-      reviewId: number | null;
-    }>
-  > {
+  ): Promise<ReviewCommentRecord[]> {
     const res = await this.octokit.rest.pulls.listReviewComments({
       owner: ref.owner,
       repo: ref.repo,
       pull_number: prNumber,
       per_page: 100,
     });
-    return res.data
-      .filter((c) => (since ? Number(new Date(c.created_at)) > since : true))
-      .map((c) => {
-        return {
-          id: c.id,
-          author: c.user?.login ?? "unknown",
-          body: c.body ?? "",
-          path: c.path,
-          line: c.line ?? null,
-          originalLine: c.original_line ?? null,
-          diffHunk: c.diff_hunk,
-          createdAt: c.created_at,
-          reviewId: c.pull_request_review_id ?? null,
-        };
-      });
+    return res.data.map((c) => ({
+      id: c.id,
+      author: c.user?.login ?? "unknown",
+      body: c.body ?? "",
+      path: c.path,
+      line: c.line ?? null,
+      originalLine: c.original_line ?? null,
+      diffHunk: c.diff_hunk,
+      createdAt: c.created_at,
+      reviewId: c.pull_request_review_id ?? null,
+    }));
   }
 
   async createComment(
@@ -220,16 +233,14 @@ export class GitHubClient {
     });
   }
 
-  async getPullRequest(
-    ref: RepoRef,
-    prNumber: number,
-  ): Promise<PullRequestDetails> {
+  async getPullRequest(ref: RepoRef, prNumber: number): Promise<PullRequest> {
     const res = await this.octokit.rest.pulls.get({
       owner: ref.owner,
       repo: ref.repo,
       pull_number: prNumber,
     });
     return {
+      repo: ref,
       number: res.data.number,
       title: res.data.title,
       body: res.data.body,
@@ -263,14 +274,14 @@ export class GitHubClient {
   }
 
   async createPullRequestReview(args: {
-    ref: RepoRef;
+    repo: RepoRef;
     prNumber: number;
     body: string;
-    comments: PullRequestReviewComment[];
+    comments: ReviewCommentDraft[];
   }): Promise<void> {
     await this.octokit.rest.pulls.createReview({
-      owner: args.ref.owner,
-      repo: args.ref.repo,
+      owner: args.repo.owner,
+      repo: args.repo.repo,
       pull_number: args.prNumber,
       event: "COMMENT",
       body: args.body,
@@ -282,6 +293,75 @@ export class GitHubClient {
       })),
     });
   }
+
+  async replyToReviewComment(
+    ref: RepoRef,
+    prNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    await this.octokit.rest.pulls.createReplyForReviewComment({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: prNumber,
+      comment_id: commentId,
+      body,
+    });
+  }
+
+  async listHooks(ref: RepoRef): Promise<HookRecord[]> {
+    const res = await this.octokit.rest.repos.listWebhooks({
+      owner: ref.owner,
+      repo: ref.repo,
+      per_page: 100,
+    });
+    return res.data.map(toHookRecord);
+  }
+
+  async createHook(
+    ref: RepoRef,
+    args: { url: string; secret: string; events: string[] },
+  ): Promise<HookRecord> {
+    const res = await this.octokit.rest.repos.createWebhook({
+      owner: ref.owner,
+      repo: ref.repo,
+      ...hookConfig(args),
+    });
+    return toHookRecord(res.data);
+  }
+
+  async updateHook(
+    ref: RepoRef,
+    hookId: number,
+    args: { url: string; secret: string; events: string[] },
+  ): Promise<HookRecord> {
+    const res = await this.octokit.rest.repos.updateWebhook({
+      owner: ref.owner,
+      repo: ref.repo,
+      hook_id: hookId,
+      ...hookConfig(args),
+    });
+    return toHookRecord(res.data);
+  }
+
+  async listHookDeliveries(
+    ref: RepoRef,
+    hookId: number,
+  ): Promise<HookDelivery[]> {
+    const res = await this.octokit.rest.repos.listWebhookDeliveries({
+      owner: ref.owner,
+      repo: ref.repo,
+      hook_id: hookId,
+      per_page: 30,
+    });
+    return res.data.map((d) => ({
+      id: d.id,
+      event: d.event,
+      statusCode: d.status_code,
+      deliveredAt: d.delivered_at,
+      redelivery: d.redelivery,
+    }));
+  }
 }
 
 function isFromFork(p: PullRequestApiRecord): boolean {
@@ -289,4 +369,25 @@ function isFromFork(p: PullRequestApiRecord): boolean {
   const base = p.base.repo?.full_name;
   if (head === undefined || base === undefined) return false;
   return head !== base;
+}
+
+function hookConfig(args: {
+  url: string;
+  secret: string;
+  events: string[];
+}): HookConfigRequest {
+  return {
+    events: args.events,
+    active: true,
+    config: { url: args.url, content_type: "json", secret: args.secret },
+  };
+}
+
+function toHookRecord(h: HookApiRecord): HookRecord {
+  return {
+    id: h.id,
+    url: h.config?.url ?? "",
+    events: h.events,
+    active: h.active,
+  };
 }

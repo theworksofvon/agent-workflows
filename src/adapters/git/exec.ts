@@ -2,19 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path, { join, resolve } from "node:path";
 import { log } from "../../log.js";
+import type { GitPort, WorkdirHandle } from "./git.interface.js";
 
-export interface WorkdirHandle {
-  /** Absolute path to the checkout. */
-  path: string;
-  /** Branch checked out. */
-  branch: string;
-  /** Temporary local branch backing this worktree. */
-  localBranch: string;
-  /** Remote branch SHA this worktree was based on. Used for explicit push leases. */
-  baseSha: string;
-  /** Cached bare repository that owns this worktree. */
-  repoCachePath: string;
-}
+export type { WorkdirHandle };
 
 function git(args: string[], opts: { cwd: string }): string {
   log.debug("git", { args, cwd: opts.cwd });
@@ -247,3 +237,12 @@ export function pushBranch(
     { cwd: workdir },
   );
 }
+
+export const gitExec: GitPort = {
+  prepareWorkdir,
+  cleanupWorkdir,
+  hasUncommittedChanges,
+  commitUncommittedChanges,
+  commitsAhead,
+  pushBranch,
+};

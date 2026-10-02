@@ -115,6 +115,7 @@ class FakeReviewClient {
   }> = [];
 
   async getPullRequest(): Promise<{
+    repo: { owner: string; repo: string };
     number: number;
     title: string;
     body: string | null;
@@ -124,6 +125,7 @@ class FakeReviewClient {
     fromFork: boolean;
   }> {
     return {
+      repo: { owner: "local-owner", repo: "sample-repo" },
       number: 1,
       title: "Test PR",
       body: "Test body",
@@ -541,6 +543,7 @@ test("draft PR review fails before running agent or posting", async () => {
   try {
     const client = new (class extends FakeReviewClient {
       async getPullRequest(): Promise<{
+        repo: { owner: string; repo: string };
         number: number;
         title: string;
         body: string | null;
@@ -550,6 +553,7 @@ test("draft PR review fails before running agent or posting", async () => {
         fromFork: boolean;
       }> {
         return {
+          repo: { owner: "local-owner", repo: "sample-repo" },
           number: 1,
           title: "Draft PR",
           body: null,

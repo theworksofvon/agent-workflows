@@ -145,7 +145,7 @@ export class PullRequestReviewWorkflow {
 
       if (post && postableFindings.length > 0) {
         await client.createPullRequestReview({
-          ref: target.repo,
+          repo: target.repo,
           prNumber: target.prNumber,
           body: `${MARKER_TAG} ${review.summary}`,
           comments: postableFindings.map((finding) => ({

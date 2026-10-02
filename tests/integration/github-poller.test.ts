@@ -44,6 +44,7 @@ test("github poller skips draft PRs before reading comments", async () => {
       async listOpenPRs() {
         return [
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 1,
             title: "Draft",
             body: null,
@@ -53,6 +54,7 @@ test("github poller skips draft PRs before reading comments", async () => {
             fromFork: false,
           },
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 2,
             title: "Ready",
             body: null,
@@ -99,6 +101,7 @@ test("github poller processes old draft comments after PR becomes ready", async 
       async listOpenPRs() {
         return [
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 1,
             title: "Was Draft",
             body: null,
@@ -108,6 +111,7 @@ test("github poller processes old draft comments after PR becomes ready", async 
             fromFork: false,
           },
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 2,
             title: "Ready",
             body: null,
@@ -170,6 +174,7 @@ test("github poller skips existing comments on a new installation", async () => 
       async listOpenPRs() {
         return [
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 1,
             title: "Ready",
             body: null,
@@ -245,6 +250,7 @@ test("github poller filters self, marker, bot, cursor, and processed comments an
       async listOpenPRs() {
         return [
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 1,
             title: "Ready",
             body: "body",
@@ -414,6 +420,7 @@ test("github poller ignores processed issue and review keys even beyond their cu
       async listOpenPRs() {
         return [
           {
+            repo: { owner: "local-owner", repo: "sample-repo" },
             number: 1,
             title: "PR",
             body: null,
