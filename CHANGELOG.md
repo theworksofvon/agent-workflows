@@ -2,15 +2,6 @@
 
 ## Unreleased
 
-### Single Comment Intake And Author Allowlist
-
-Date: 2026-10-02 CDT; Status: Completed; PR: Pending on `feat/agentic-restructure`.
-Task: Give polling and the upcoming webhook path one place that decides whether a comment enters a pending batch.
-Message: Comments now pass through one intake service, and `ALLOWED_AUTHORS` can restrict which authors the agent acts on.
-Added/Changed: Added `domain/batching.ts` (comment keys, group keys, drop rules, retry and summary helpers), `services/intake.ts`, and the optional comma-separated `ALLOWED_AUTHORS` setting; the poller is now `pollRepos` and returns ready batches directly, with the daemon and CLI wiring updated to match.
-Fixed/Removed: Removed the poller's inline filters and the `Source`/event wrapper types; bot-author filtering now also applies to inline review comments, and dropped comments still advance cursors.
-Handoff: Run the full pnpm gate; set `ALLOWED_AUTHORS` to verify non-listed authors are ignored.
-
 ### Narrow Supported CI Platforms
 
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `agent/drop-windows-ci`.

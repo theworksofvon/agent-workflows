@@ -87,8 +87,8 @@ test("github poller skips draft PRs before reading comments", async () => {
     } satisfies GitHubPollingClient;
 
     const config = makeConfig(root);
-    const poll = () =>
-      pollRepos({ config, client, state: jsonFileState(config) });
+    const state = jsonFileState(config);
+    const poll = () => pollRepos({ config, client, state });
     const events = await poll();
 
     assert.deepEqual(commentReads, [2, 2]);
@@ -154,8 +154,8 @@ test("github poller processes old draft comments after PR becomes ready", async 
     } satisfies GitHubPollingClient;
 
     const config = makeConfig(root);
-    const poll = () =>
-      pollRepos({ config, client, state: jsonFileState(config) });
+    const state = jsonFileState(config);
+    const poll = () => pollRepos({ config, client, state });
     const firstPoll = await poll();
     assert.deepEqual(
       firstPoll.map((event) => event.prNumber),
@@ -234,8 +234,8 @@ test("github poller skips existing comments on a new installation", async () => 
 
     const config = makeConfig(root);
     config.processExistingCommentsOnFirstRun = false;
-    const poll = () =>
-      pollRepos({ config, client, state: jsonFileState(config) });
+    const state = jsonFileState(config);
+    const poll = () => pollRepos({ config, client, state });
 
     assert.deepEqual(await poll(), []);
     includeNewComment = true;
@@ -347,17 +347,16 @@ test("github poller filters self, marker, bot, cursor, and processed comments an
         ];
       },
     } satisfies GitHubPollingClient;
-    const poll = () =>
-      pollRepos({ config, client, state: jsonFileState(config) });
+    const state = jsonFileState(config);
+    const poll = () => pollRepos({ config, client, state });
     const events = await poll();
     assert.equal(events.length, 3);
-    const payloads = events;
     assert.deepEqual(
-      payloads.map((payload) => payload.comments[0].id),
+      events.map((payload) => payload.comments[0].id),
       [4, 12, 13],
     );
-    assert.equal(payloads[1].comments[0].review?.line, 4);
-    assert.equal(payloads[2].comments[0].review?.line, 5);
+    assert.equal(events[1].comments[0].review?.line, 4);
+    assert.equal(events[2].comments[0].review?.line, 5);
     assert.deepEqual(await poll(), []);
   } finally {
     rmSync(root, { recursive: true, force: true });

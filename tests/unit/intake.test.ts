@@ -127,3 +127,52 @@ test("dropped and processed comments are reported with a reason", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("bot-authored review comments are dropped and still advance the review cursor", () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
+  try {
+    const state = new GitHubRepoStateStore(root, pr.repo, {
+      processedCommentKeyLimit: 10,
+      commentBatchHistoryLimit: 5,
+    });
+    const result = ingestComment({
+      state,
+      pr,
+      now: 1,
+      policy,
+      comment: comment({
+        key: "o/r#4:review:31",
+        id: 31,
+        kind: "review",
+        author: "x[bot]",
+        reviewId: 8,
+        review: { path: "a.ts", line: 1, diffHunk: "@@" },
+      }),
+    });
+    assert.deepEqual(result, { accepted: false, reason: "bot" });
+    assert.equal(state.getReviewCommentCursor(4), 31);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an older comment id never moves the cursor backwards", () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
+  try {
+    const state = new GitHubRepoStateStore(root, pr.repo, {
+      processedCommentKeyLimit: 10,
+      commentBatchHistoryLimit: 5,
+    });
+    ingestComment({ state, pr, now: 1, policy, comment: comment() });
+    ingestComment({
+      state,
+      pr,
+      now: 1,
+      policy,
+      comment: comment({ key: "o/r#4:issue:5", id: 5 }),
+    });
+    assert.equal(state.getIssueCommentCursor(4), 10);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
