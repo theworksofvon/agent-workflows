@@ -239,7 +239,7 @@ Deterministic policy, applied in both `services/poll.ts` and `services/webhook.t
 | Prompt prose in `src/workflows/pr-comment/context.ts` | this repo | vstack `skills/pr-feedback/SKILL.md` (new) |
 | `skills/pr-reviewer` | this repo | deleted; vstack copy is identical and already linked |
 | `skills/model-orchestrator` | this repo | deleted; vstack copy is newer. Review it separately. |
-| `dotfiles/agents/skills/model-orchestrator` | dotfiles | deleted; third copy |
+| `dotfiles/agents/skills/model-orchestrator` | dotfiles | already removed on `agents/hooks-dir`; nothing to do |
 | `scripts/install-shared-skills.*`, skill checks in `doctor.mjs` | this repo | deleted; vstack and `skill-forge` own linking |
 | Permission-bypass flags in agent adapters | this repo | stay. They are launch arguments, not guards. Guards are dotfiles hooks and already apply to any session on this machine. |
 
@@ -290,6 +290,10 @@ anything about pushing, batching, or GitHub.
 12. Before restarting the daemon: move `state/github/EK-LABS-LLC/pluto-predicts.json`
     aside so cursors re-establish, and trim `REPOS` or set `ALLOWED_AUTHORS`
     for the public repositories.
+
+The run directory holding the packet and report lives at
+`<stateDir>/runs/<taskId>/`, outside the worktree, with absolute paths in the
+packet, so a fallback `git add -A` never commits it.
 
 ## Follow-ups, out of scope here
 
