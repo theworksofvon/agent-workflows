@@ -19,14 +19,14 @@ Non-goals: fork PR support, a GitHub App identity, Windows service support.
 
 ## Principle
 
-| Code decides | Agent decides |
-| --- | --- |
-| Which comments form a batch and when it is ready | Which comments to act on, skip, or escalate, and why |
-| Author allowlist and bot filtering | What a comment means and what change it implies |
-| Worktree, branch, base SHA | What to inspect, edit, and run |
-| Whether anything was committed and whether to push | How many commits and what goes in them |
-| What is posted to GitHub and in what shape | The wording of each reply and the summary |
-| Retries, cursors, marking processed | Whether a comment is answerable at all |
+| Code decides                                       | Agent decides                                        |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| Which comments form a batch and when it is ready   | Which comments to act on, skip, or escalate, and why |
+| Author allowlist and bot filtering                 | What a comment means and what change it implies      |
+| Worktree, branch, base SHA                         | What to inspect, edit, and run                       |
+| Whether anything was committed and whether to push | How many commits and what goes in them               |
+| What is posted to GitHub and in what shape         | The wording of each reply and the summary            |
+| Retries, cursors, marking processed                | Whether a comment is answerable at all               |
 
 Inside the task the agent is unconstrained. It runs as a full harness session
 in the worktree with its normal tools and the vstack skills loaded. The launch
@@ -74,11 +74,11 @@ The daemon binds `HOST` (default `127.0.0.1`) and `PORT` (default 3773). How
 GitHub reaches it is one of three configurations, none of which the core
 depends on:
 
-| Config | Behaviour |
-| --- | --- |
-| `PUBLIC_URL` set | Daemon registers that URL with GitHub. User owns the ingress (reverse proxy, Cloudflare Tunnel, anything). |
+| Config                  | Behaviour                                                                                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_URL` set        | Daemon registers that URL with GitHub. User owns the ingress (reverse proxy, Cloudflare Tunnel, anything).                                                                                    |
 | `TAILSCALE_FUNNEL=true` | Daemon runs `tailscale funnel <PORT>` at start and `off` at stop, derives the public URL from `tailscale status`, and registers it. Funnel, not Serve, because GitHub is outside the tailnet. |
-| Neither | Webhooks disabled. Polling only. |
+| Neither                 | Webhooks disabled. Polling only.                                                                                                                                                              |
 
 `adapters/tailscale/` is the only place the Tailscale CLI is invoked. It is an
 optional adapter the way t3code treats Tailscale as an endpoint provider.
@@ -142,13 +142,25 @@ Code writes a packet into the run directory inside the worktree:
 
 ```json
 {
-  "repo": "owner/name", "prNumber": 12, "title": "...", "body": "...",
-  "headRef": "...", "baseRef": "...", "baseSha": "...",
+  "repo": "owner/name",
+  "prNumber": 12,
+  "title": "...",
+  "body": "...",
+  "headRef": "...",
+  "baseRef": "...",
+  "baseSha": "...",
   "comments": [
-    { "key": "owner/name#12:review:991", "author": "...", "kind": "review",
-      "path": "src/x.ts", "line": 40, "diffHunk": "...", "body": "..." }
+    {
+      "key": "owner/name#12:review:991",
+      "author": "...",
+      "kind": "review",
+      "path": "src/x.ts",
+      "line": 40,
+      "diffHunk": "...",
+      "body": "..."
+    }
   ],
-  "history": [ { "handledAt": "...", "summary": "..." } ],
+  "history": [{ "handledAt": "...", "summary": "..." }],
   "reportPath": ".agent-workflows/report.json"
 }
 ```
@@ -160,8 +172,16 @@ The agent writes the report. It is mandatory.
   "summary": "one paragraph for the PR comment",
   "comments": [
     { "key": "...", "decision": "addressed", "note": "optional" },
-    { "key": "...", "decision": "skipped", "reason": "already handled in abc123" },
-    { "key": "...", "decision": "needs_human", "reason": "conflicts with the stated design" }
+    {
+      "key": "...",
+      "decision": "skipped",
+      "reason": "already handled in abc123"
+    },
+    {
+      "key": "...",
+      "decision": "needs_human",
+      "reason": "conflicts with the stated design"
+    }
   ]
 }
 ```
@@ -195,14 +215,14 @@ summary comment and the per-thread replies.
 
 Designed so the daemon keeps flowing and nobody is paged.
 
-| Situation | Action |
-| --- | --- |
-| Agent exits nonzero with a rate-limit signature | Pause batch, retry after `AGENT_RETRY_DELAY_SEC`, up to `AGENT_MAX_ATTEMPTS`. Unchanged. |
-| Agent exits but no report | Relaunch once in the same worktree with the prompt "your report at <path> is missing; write it now, change nothing else". |
-| Still no report, or report invalid | Discard the worktree. No push. Post one summary: "agent produced no report; batch not applied". Mark processed so the batch does not loop. |
-| Report valid, commits exist | Push and post. |
-| Report valid, no commits, all decisions `skipped` or `needs_human` | No push. Post replies and summary. |
-| Push rejected by lease | Post summary "branch moved during run; changes discarded". Mark processed. |
+| Situation                                                          | Action                                                                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent exits nonzero with a rate-limit signature                    | Pause batch, retry after `AGENT_RETRY_DELAY_SEC`, up to `AGENT_MAX_ATTEMPTS`. Unchanged.                                                   |
+| Agent exits but no report                                          | Relaunch once in the same worktree with the prompt "your report at <path> is missing; write it now, change nothing else".                  |
+| Still no report, or report invalid                                 | Discard the worktree. No push. Post one summary: "agent produced no report; batch not applied". Mark processed so the batch does not loop. |
+| Report valid, commits exist                                        | Push and post.                                                                                                                             |
+| Report valid, no commits, all decisions `skipped` or `needs_human` | No push. Post replies and summary.                                                                                                         |
+| Push rejected by lease                                             | Post summary "branch moved during run; changes discarded". Mark processed.                                                                 |
 
 `needs_human` is a label on a reply, not a stop. The daemon moves on. A later
 comment on that thread is just a new comment.
@@ -220,28 +240,28 @@ Deterministic policy, applied in both `services/poll.ts` and `services/webhook.t
 
 ## Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | Listener bind address. |
-| `PORT` | `3773` | Listener port. |
-| `WEBHOOK_SECRET` | unset | HMAC secret shared with GitHub. Required when webhooks are on. |
-| `PUBLIC_URL` | unset | URL GitHub posts to when the user owns ingress. |
-| `TAILSCALE_FUNNEL` | `false` | Expose `PORT` through Tailscale Funnel and derive the URL. |
-| `POLL_INTERVAL_SEC` | `300` | Reconciliation interval. Was 60. |
-| `MAX_CONCURRENT_RUNS` | `3` | Global cap on simultaneous agent runs. |
-| `AUTO_REVIEW` | `false` | Review newly opened or ready PRs and post findings. |
-| `ALLOWED_AUTHORS` | unset | Comma-separated logins allowed to trigger runs. |
+| Variable              | Default     | Purpose                                                        |
+| --------------------- | ----------- | -------------------------------------------------------------- |
+| `HOST`                | `127.0.0.1` | Listener bind address.                                         |
+| `PORT`                | `3773`      | Listener port.                                                 |
+| `WEBHOOK_SECRET`      | unset       | HMAC secret shared with GitHub. Required when webhooks are on. |
+| `PUBLIC_URL`          | unset       | URL GitHub posts to when the user owns ingress.                |
+| `TAILSCALE_FUNNEL`    | `false`     | Expose `PORT` through Tailscale Funnel and derive the URL.     |
+| `POLL_INTERVAL_SEC`   | `300`       | Reconciliation interval. Was 60.                               |
+| `MAX_CONCURRENT_RUNS` | `3`         | Global cap on simultaneous agent runs.                         |
+| `AUTO_REVIEW`         | `false`     | Review newly opened or ready PRs and post findings.            |
+| `ALLOWED_AUTHORS`     | unset       | Comma-separated logins allowed to trigger runs.                |
 
 ## What moves where
 
-| Thing | From | To |
-| --- | --- | --- |
-| Prompt prose in `src/workflows/pr-comment/context.ts` | this repo | vstack `skills/pr-feedback/SKILL.md` (new) |
-| `skills/pr-reviewer` | this repo | deleted; vstack copy is identical and already linked |
-| `skills/model-orchestrator` | this repo | deleted; vstack copy is newer. Review it separately. |
-| `dotfiles/agents/skills/model-orchestrator` | dotfiles | already removed on `agents/hooks-dir`; nothing to do |
-| `scripts/install-shared-skills.*`, skill checks in `doctor.mjs` | this repo | deleted; vstack and `skill-forge` own linking |
-| Permission-bypass flags in agent adapters | this repo | stay. They are launch arguments, not guards. Guards are dotfiles hooks and already apply to any session on this machine. |
+| Thing                                                           | From      | To                                                                                                                       |
+| --------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Prompt prose in `src/workflows/pr-comment/context.ts`           | this repo | vstack `skills/pr-feedback/SKILL.md` (new)                                                                               |
+| `skills/pr-reviewer`                                            | this repo | deleted; vstack copy is identical and already linked                                                                     |
+| `skills/model-orchestrator`                                     | this repo | deleted; vstack copy is newer. Review it separately.                                                                     |
+| `dotfiles/agents/skills/model-orchestrator`                     | dotfiles  | already removed on `agents/hooks-dir`; nothing to do                                                                     |
+| `scripts/install-shared-skills.*`, skill checks in `doctor.mjs` | this repo | deleted; vstack and `skill-forge` own linking                                                                            |
+| Permission-bypass flags in agent adapters                       | this repo | stay. They are launch arguments, not guards. Guards are dotfiles hooks and already apply to any session on this machine. |
 
 The `pr-feedback` skill carries: the role, the evidence standard for deciding
 addressed vs skipped vs needs_human, the instruction to run the repository's

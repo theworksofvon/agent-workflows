@@ -1,7 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
-state/
+/state/
 *.log
 .env
 .DS_Store
