@@ -1,13 +1,14 @@
 import "dotenv/config";
 import { resolve } from "node:path";
 import { log } from "./log.js";
+import type { ReviewAdversarialMode } from "./domain/risk.js";
 
 export interface RepoSpec {
   owner: string;
   repo: string;
 }
 
-export type ReviewAdversarialMode = "off" | "auto" | "always";
+export type { ReviewAdversarialMode };
 
 export interface Config {
   githubToken: string;

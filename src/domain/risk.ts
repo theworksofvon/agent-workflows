@@ -1,6 +1,7 @@
-import type { ReviewAdversarialMode } from "../config.js";
 import type { ReviewResult } from "./decisions.js";
 import type { ReviewContext } from "./events.js";
+
+export type ReviewAdversarialMode = "off" | "auto" | "always";
 
 export interface AdversarialDecision {
   run: boolean;
