@@ -12,7 +12,8 @@ import test from "node:test";
 import type { Config } from "../../src/config.js";
 import { Daemon } from "../../src/services/daemon.js";
 import { GitHubClient } from "../../src/adapters/github/octokit.js";
-import { githubPoller } from "../../src/services/poll.js";
+import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import { pollRepos } from "../../src/services/poll.js";
 import { prepareWorkdir } from "../../src/adapters/git/exec.js";
 import {
   defaultHandleFeedbackDependencies,
@@ -42,7 +43,8 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
     const client = new GitHubClient("test-token", {
       baseUrl: `http://127.0.0.1:${address.port}`,
     });
-    const source = githubPoller({ config, client });
+    const stateFor = jsonFileState(config);
+    const poll = () => pollRepos({ config, client, state: stateFor });
     const feedbackDependencies: HandleFeedbackDependencies = {
       ...defaultHandleFeedbackDependencies,
       prepareWorkdir: (args) =>
@@ -61,7 +63,7 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
         return { exitCode: 0, stdout: "done", stderr: "" };
       },
     };
-    const daemon = new Daemon(config, source, client, agent, {
+    const daemon = new Daemon(config, poll, client, agent, {
       handleFeedback: (batch, ctx) =>
         handleFeedback(batch, ctx, feedbackDependencies),
     });
@@ -109,6 +111,7 @@ function createConfig(root: string): Config {
     reviewAdversarialAgent: "codex",
     processExistingCommentsOnFirstRun: true,
     agentSelfUser: null,
+    allowedAuthors: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",
     claudeCodeBin: "claude",

@@ -94,6 +94,7 @@ function makeConfig(root = tmpdir()): Config {
     reviewAdversarialAgent: "claude-code",
     processExistingCommentsOnFirstRun: false,
     agentSelfUser: null,
+    allowedAuthors: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode-test",
     claudeCodeBin: "claude-test",
@@ -115,6 +116,7 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
       assert.equal(config.agent, "codex");
       assert.equal(config.reviewAdversarialAgent, "codex");
       assert.equal(config.agentSelfUser, null);
+      assert.equal(config.allowedAuthors, null);
       assert.equal(config.processExistingCommentsOnFirstRun, false);
       assert.equal(config.keepWorkdirs, false);
       assert.equal(config.stateDir, resolve("./state"));
@@ -141,6 +143,7 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
         REVIEW_ADVERSARIAL_AGENT: "claude-code",
         PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN: "true",
         AGENT_SELF_USER: " bot ",
+        ALLOWED_AUTHORS: "alice, Bob",
         STATE_DIR: root,
         ZCODE_BIN: " z ",
         CLAUDE_CODE_BIN: " c ",
@@ -154,6 +157,7 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
         assert.equal(config.reviewAdversarialMode, "always");
         assert.equal(config.reviewAdversarialAgent, "claude-code");
         assert.equal(config.agentSelfUser, "bot");
+        assert.deepEqual(config.allowedAuthors, ["alice", "Bob"]);
         assert.equal(config.processExistingCommentsOnFirstRun, true);
         assert.equal(config.keepWorkdirs, true);
         assert.equal(config.zcodeBin, "z");
@@ -718,23 +722,12 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
   let pollCount = 0;
   const daemon = new Daemon(
     config,
-    {
-      name: "fake-source",
-      async poll() {
-        pollCount += 1;
-        return [
-          {
-            kind: "pr_comment" as const,
-            id: "1",
-            payload: { batchId: "1" } as CommentBatch,
-          },
-          {
-            kind: "pr_comment" as const,
-            id: "3",
-            payload: { batchId: "3" } as CommentBatch,
-          },
-        ];
-      },
+    async () => {
+      pollCount += 1;
+      return [
+        { batchId: "1" } as CommentBatch,
+        { batchId: "3" } as CommentBatch,
+      ];
     },
     {
       async createComment(...args: unknown[]) {
@@ -778,12 +771,9 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
   const client = { async createComment() {} };
   const overlapping = new Daemon(
     config,
-    {
-      name: "slow",
-      async poll() {
-        await gate;
-        return [];
-      },
+    async () => {
+      await gate;
+      return [];
     },
     client,
     agent,
@@ -795,11 +785,8 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
 
   const failing = new Daemon(
     config,
-    {
-      name: "bad",
-      async poll() {
-        throw new Error("poll broke");
-      },
+    async () => {
+      throw new Error("poll broke");
     },
     client,
     agent,
@@ -815,12 +802,9 @@ test("Daemon start/stop owns one deterministic recursive timer", async () => {
   let polls = 0;
   const daemon = new Daemon(
     config,
-    {
-      name: "source",
-      async poll() {
-        polls += 1;
-        return [];
-      },
+    async () => {
+      polls += 1;
+      return [];
     },
     { async createComment() {} },
     {
@@ -857,12 +841,9 @@ test("Daemon start/stop owns one deterministic recursive timer", async () => {
 
   const stopDuringPoll = new Daemon(
     config,
-    {
-      name: "source",
-      async poll() {
-        stopDuringPoll.stop();
-        return [];
-      },
+    async () => {
+      stopDuringPoll.stop();
+      return [];
     },
     { async createComment() {} },
     {
@@ -893,13 +874,10 @@ test("Daemon restart while the first start is polling keeps one timer chain", as
   });
   const daemon = new Daemon(
     config,
-    {
-      name: "blocked-source",
-      async poll() {
-        polls += 1;
-        if (polls === 1) await firstPollGate;
-        return [];
-      },
+    async () => {
+      polls += 1;
+      if (polls === 1) await firstPollGate;
+      return [];
     },
     { async createComment() {} },
     {
@@ -974,12 +952,7 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     }),
-    createPoller: () => ({
-      name: "poller",
-      async poll() {
-        return [];
-      },
-    }),
+    createPoll: () => async () => [],
     createDaemon: () => ({
       async start() {
         calls.push("started");
@@ -1164,21 +1137,24 @@ test("review CLI validates flags, selects adversarial policy, and prints every r
   assert.match(help[0], /agent-workflows/);
 });
 
-test("default CLI factories construct local runtime objects without external calls", () => {
+test("default CLI factories construct local runtime objects without external calls", async () => {
   const config = makeConfig();
   const client = defaultCliDependencies.createClient("token");
   const agent = defaultCliDependencies.getAgent("codex", config);
-  const source = defaultCliDependencies.createPoller({ config, client });
+  const poll = defaultCliDependencies.createPoll({
+    config: { ...config, repos: [] },
+    client,
+  });
   const daemon = defaultCliDependencies.createDaemon({
     config,
-    source,
+    poll,
     client,
     agent,
   });
   const workflow = defaultCliDependencies.createReviewWorkflow();
   assert.ok(client.octokit);
   assert.equal(agent.name, "codex");
-  assert.equal(source.name, "github-pr-comments");
+  assert.deepEqual(await poll(), []);
   assert.equal(typeof daemon.start, "function");
   assert.equal(typeof workflow.run, "function");
 });

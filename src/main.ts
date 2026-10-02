@@ -3,7 +3,9 @@ import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./adapters/github/octokit.js";
-import { githubPoller, type Source } from "./services/poll.js";
+import { pollRepos } from "./services/poll.js";
+import { jsonFileState } from "./adapters/state/json-file.js";
+import type { CommentBatch } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
 import { Daemon } from "./services/daemon.js";
@@ -19,10 +21,13 @@ export interface CliDependencies {
   loadConfig(options: { requireRepos: boolean }): Config;
   createClient(token: string): GitHubClient;
   getAgent(name: string, config: Config): AgentAdapter;
-  createPoller(args: { config: Config; client: GitHubClient }): Source;
+  createPoll(args: {
+    config: Config;
+    client: GitHubClient;
+  }): () => Promise<CommentBatch[]>;
   createDaemon(args: {
     config: Config;
-    source: Source;
+    poll: () => Promise<CommentBatch[]>;
     client: GitHubClient;
     agent: AgentAdapter;
   }): Pick<Daemon, "start" | "stop">;
@@ -36,9 +41,12 @@ export const defaultCliDependencies: CliDependencies = {
   loadConfig,
   createClient: (token) => new GitHubClient(token),
   getAgent,
-  createPoller: githubPoller,
-  createDaemon: ({ config, source, client, agent }) =>
-    new Daemon(config, source, client, agent),
+  createPoll: ({ config, client }) => {
+    const state = jsonFileState(config);
+    return () => pollRepos({ config, client, state });
+  },
+  createDaemon: ({ config, poll, client, agent }) =>
+    new Daemon(config, poll, client, agent),
   createReviewWorkflow: () => new PullRequestReviewWorkflow(),
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
@@ -66,8 +74,8 @@ export async function runCli(
   const client = dependencies.createClient(config.githubToken);
   const agent = dependencies.getAgent(config.agent, config);
 
-  const source = dependencies.createPoller({ config, client });
-  const daemon = dependencies.createDaemon({ config, source, client, agent });
+  const poll = dependencies.createPoll({ config, client });
+  const daemon = dependencies.createDaemon({ config, poll, client, agent });
 
   const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });

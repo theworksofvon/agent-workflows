@@ -13,7 +13,11 @@ import {
   pushBranch,
 } from "../adapters/git/exec.js";
 import { buildPrompt } from "./feedback-prompt.js";
-import { MARKER_TAG } from "../adapters/github/octokit.js";
+import {
+  MARKER_TAG,
+  isRetryableAgentFailure,
+  summarizeBatch,
+} from "../domain/batching.js";
 import { log } from "../log.js";
 
 /**
@@ -178,40 +182,4 @@ async function runAgent(
     stderrTail: res.stderr.slice(-500),
   });
   return res;
-}
-
-function isRetryableAgentFailure(output: string): boolean {
-  const normalized = output.toLowerCase();
-  return [
-    "rate limit",
-    "usage limit",
-    "quota",
-    "too many requests",
-    "429",
-    "temporarily unavailable",
-    "try again later",
-    "capacity",
-  ].some((needle) => normalized.includes(needle));
-}
-
-function summarizeBatch(p: CommentBatch, commitCount: number): string {
-  const files = [
-    ...new Set(
-      p.comments
-        .map((comment) => comment.review?.path)
-        .filter((path): path is string => Boolean(path)),
-    ),
-  ];
-  const authors = [
-    ...new Set(p.comments.map((comment) => `@${comment.author}`)),
-  ];
-  const fileText =
-    files.length > 0 ? ` on ${files.slice(0, 5).join(", ")}` : "";
-  const moreFiles =
-    files.length > 5 ? ` and ${files.length - 5} more file(s)` : "";
-  const result =
-    commitCount > 0
-      ? `produced ${commitCount} commit(s)`
-      : "produced no commits";
-  return `Handled batch from ${authors.join(", ")} with ${p.comments.length} comment(s)${fileText}${moreFiles}; ${result}`;
 }

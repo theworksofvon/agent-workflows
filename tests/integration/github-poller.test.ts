@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../../src/config.js";
 import {
-  githubPoller,
+  pollRepos,
   type GitHubPollingClient,
 } from "../../src/services/poll.js";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
+import {
+  GitHubRepoStateStore,
+  jsonFileState,
+} from "../../src/adapters/state/json-file.js";
 
 function makeConfig(root: string): Config {
   return {
@@ -28,6 +31,7 @@ function makeConfig(root: string): Config {
     reviewAdversarialAgent: "fake",
     processExistingCommentsOnFirstRun: true,
     agentSelfUser: null,
+    allowedAuthors: null,
     stateDir: join(root, "state"),
     zcodeBin: "zcode",
     claudeCodeBin: "claude",
@@ -82,12 +86,14 @@ test("github poller skips draft PRs before reading comments", async () => {
       },
     } satisfies GitHubPollingClient;
 
-    const poller = githubPoller({ config: makeConfig(root), client });
-    const events = await poller.poll();
+    const config = makeConfig(root);
+    const poll = () =>
+      pollRepos({ config, client, state: jsonFileState(config) });
+    const events = await poll();
 
     assert.deepEqual(commentReads, [2, 2]);
     assert.equal(events.length, 1);
-    assert.equal(events[0].payload.prNumber, 2);
+    assert.equal(events[0].prNumber, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -147,20 +153,22 @@ test("github poller processes old draft comments after PR becomes ready", async 
       },
     } satisfies GitHubPollingClient;
 
-    const poller = githubPoller({ config: makeConfig(root), client });
-    const firstPoll = await poller.poll();
+    const config = makeConfig(root);
+    const poll = () =>
+      pollRepos({ config, client, state: jsonFileState(config) });
+    const firstPoll = await poll();
     assert.deepEqual(
-      firstPoll.map((event) => event.payload.prNumber),
+      firstPoll.map((event) => event.prNumber),
       [2],
     );
 
     draft = false;
-    const secondPoll = await poller.poll();
+    const secondPoll = await poll();
     assert.deepEqual(
-      secondPoll.map((event) => event.payload.prNumber),
+      secondPoll.map((event) => event.prNumber),
       [1],
     );
-    assert.equal(secondPoll[0].payload.comments[0].id, 100);
+    assert.equal(secondPoll[0].comments[0].id, 100);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -226,14 +234,15 @@ test("github poller skips existing comments on a new installation", async () => 
 
     const config = makeConfig(root);
     config.processExistingCommentsOnFirstRun = false;
-    const poller = githubPoller({ config, client });
+    const poll = () =>
+      pollRepos({ config, client, state: jsonFileState(config) });
 
-    assert.deepEqual(await poller.poll(), []);
+    assert.deepEqual(await poll(), []);
     includeNewComment = true;
-    const events = await poller.poll();
+    const events = await poll();
     assert.equal(events.length, 2);
     assert.deepEqual(
-      events.map((event) => event.payload.comments[0].id),
+      events.map((event) => event.comments[0].id),
       [11, 21],
     );
   } finally {
@@ -338,17 +347,18 @@ test("github poller filters self, marker, bot, cursor, and processed comments an
         ];
       },
     } satisfies GitHubPollingClient;
-    const poller = githubPoller({ config, client });
-    const events = await poller.poll();
+    const poll = () =>
+      pollRepos({ config, client, state: jsonFileState(config) });
+    const events = await poll();
     assert.equal(events.length, 3);
-    const payloads = events.map((event) => event.payload);
+    const payloads = events;
     assert.deepEqual(
       payloads.map((payload) => payload.comments[0].id),
       [4, 12, 13],
     );
     assert.equal(payloads[1].comments[0].review?.line, 4);
     assert.equal(payloads[2].comments[0].review?.line, 5);
-    assert.deepEqual(await poller.poll(), []);
+    assert.deepEqual(await poll(), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -374,7 +384,10 @@ test("github poller isolates repository failures and continues polling healthy r
         return [];
       },
     } satisfies GitHubPollingClient;
-    assert.deepEqual(await githubPoller({ config, client }).poll(), []);
+    assert.deepEqual(
+      await pollRepos({ config, client, state: jsonFileState(config) }),
+      [],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -450,7 +463,52 @@ test("github poller ignores processed issue and review keys even beyond their cu
         ];
       },
     } satisfies GitHubPollingClient;
-    assert.deepEqual(await githubPoller({ config, client }).poll(), []);
+    assert.deepEqual(
+      await pollRepos({ config, client, state: jsonFileState(config) }),
+      [],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("github poller drops authors outside the allowlist but still advances the cursor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-poller-allow-"));
+  try {
+    const config = makeConfig(root);
+    config.allowedAuthors = ["alice"];
+    const client = {
+      async listOpenPRs() {
+        return [
+          {
+            repo: { owner: "local-owner", repo: "sample-repo" },
+            number: 1,
+            title: "PR",
+            body: null,
+            headRef: "head",
+            baseRef: "main",
+            draft: false,
+            fromFork: false,
+          },
+        ];
+      },
+      async listIssueComments() {
+        return [
+          { id: 5, author: "Alice", body: "mine", createdAt: "now" },
+          { id: 6, author: "bob", body: "not allowed", createdAt: "now" },
+        ];
+      },
+      async listReviewComments() {
+        return [];
+      },
+    } satisfies GitHubPollingClient;
+    const state = jsonFileState(config);
+    const batches = await pollRepos({ config, client, state });
+    assert.deepEqual(
+      batches.flatMap((batch) => batch.comments.map((c) => c.author)),
+      ["Alice"],
+    );
+    assert.equal(state(config.repos[0]).getIssueCommentCursor(1), 6);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

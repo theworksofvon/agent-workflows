@@ -139,12 +139,7 @@ export interface GitHubApi {
   ): Promise<PullRequestFileApiRecord[]>;
 }
 
-/**
- * Marker tag embedded in every comment this daemon writes. The poller filters
- * these out so the agent never reacts to its own output. Chose an HTML comment
- * so it's invisible in the rendered PR but trivially greppable.
- */
-export const MARKER_TAG = "<!-- agent-workflows:bot -->";
+export { MARKER_TAG } from "../../domain/batching.js";
 
 export class GitHubClient implements GitHubPort {
   readonly octokit: GitHubApi;

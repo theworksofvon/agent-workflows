@@ -32,6 +32,7 @@ function config(root: string): Config {
     reviewAdversarialAgent: "fake",
     processExistingCommentsOnFirstRun: true,
     agentSelfUser: null,
+    allowedAuthors: null,
     stateDir: join(root, "state"),
     zcodeBin: "z",
     claudeCodeBin: "c",

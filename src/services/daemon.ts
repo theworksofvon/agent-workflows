@@ -1,7 +1,6 @@
 import type { Config } from "../config.js";
 import type { CommentBatch } from "../domain/events.js";
-import type { Source } from "./poll.js";
-import type { GitHubClient } from "../adapters/github/octokit.js";
+import type { GitHubPort } from "../adapters/github/github.interface.js";
 import type { AgentAdapter } from "../adapters/agent/agent.interface.js";
 import { SerialQueue } from "./queue.js";
 import { handleFeedback, type RunCtx } from "./handle-feedback.js";
@@ -34,8 +33,8 @@ export class Daemon {
 
   constructor(
     private readonly config: Config,
-    private readonly source: Source,
-    private readonly client: Pick<GitHubClient, "createComment">,
+    private readonly poll: () => Promise<CommentBatch[]>,
+    private readonly client: Pick<GitHubPort, "createComment">,
     private readonly agent: AgentAdapter,
     dependencies: DaemonDependencies = {},
   ) {
@@ -50,7 +49,6 @@ export class Daemon {
     this.running = true;
     const generation = ++this.lifecycleGeneration;
     log.info("daemon started", {
-      source: this.source.name,
       agent: this.agent.name,
       pollIntervalSec: this.config.pollIntervalSec,
     });
@@ -89,10 +87,10 @@ export class Daemon {
     }
     this.polling = true;
     try {
-      const events = await this.source.poll();
-      for (const event of events) {
+      const batches = await this.poll();
+      for (const batch of batches) {
         const ctx = this.makeRunCtx();
-        this.queue.enqueue(() => this.handle(event.payload, ctx));
+        this.queue.enqueue(() => this.handle(batch, ctx));
       }
     } catch (err) {
       log.error("poll tick failed", { error: String(err) });

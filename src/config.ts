@@ -27,6 +27,7 @@ export interface Config {
   reviewAdversarialAgent: string;
   processExistingCommentsOnFirstRun: boolean;
   agentSelfUser: string | null;
+  allowedAuthors: string[] | null;
   stateDir: string;
   zcodeBin: string;
   claudeCodeBin: string;
@@ -67,6 +68,14 @@ function parseRepos(raw: string): RepoSpec[] {
     });
 }
 
+function parseList(raw: string): string[] | null {
+  const items = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : null;
+}
+
 export function loadConfig(options: LoadConfigOptions = {}): Config {
   const requireRepos = options.requireRepos ?? true;
   const rawRepos = process.env.REPOS?.trim() ?? "";
@@ -103,6 +112,7 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     processExistingCommentsOnFirstRun:
       optional("PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN", "false") === "true",
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
+    allowedAuthors: parseList(optional("ALLOWED_AUTHORS", "")),
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
@@ -172,6 +182,7 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     prContextHistoryLimit: cfg.prContextHistoryLimit,
     agentRetryDelaySec: cfg.agentRetryDelaySec,
     agentMaxAttempts: cfg.agentMaxAttempts,
+    allowedAuthors: cfg.allowedAuthors,
     stateDir: cfg.stateDir,
   });
   return cfg;
