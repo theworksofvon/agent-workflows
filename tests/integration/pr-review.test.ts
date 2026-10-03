@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type {
@@ -829,7 +835,7 @@ test("review workflow reports missing adversarial adapters, agent failures, and 
     };
     await assert.rejects(
       () => runReview({ ...base, agent: malformed }),
-      /Failed to parse primary review agent output/,
+      /Failed to parse primary review agent output.*stderr tail: parse details/s,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -906,6 +912,44 @@ test("relaunch recovers when the agent writes the report the second time", async
     });
     assert.equal(result.review.summary, "late");
     assert.equal(calls, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a stale report from an earlier run does not satisfy a new run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-stale-"));
+  try {
+    const remote = createBareRemote(root);
+    const config = { ...makeConfig(root), keepWorkdirs: true };
+    const runDir = join(
+      config.stateDir,
+      "runs",
+      "review_local-owner_sample-repo_1",
+    );
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "primary-report.json"),
+      JSON.stringify({ summary: "stale", findings: [] }),
+    );
+    await assert.rejects(
+      () =>
+        runReview({
+          config,
+          client: new FakeReviewClient(),
+          agent: new FakeAgent(
+            { summary: "unused", findings: [] },
+            { silent: true },
+          ),
+          target: {
+            repo: { owner: "local-owner", repo: "sample-repo" },
+            prNumber: 1,
+          },
+          post: false,
+          cloneUrlOverride: remote,
+        }),
+      ReportMissingError,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
