@@ -30,9 +30,8 @@ if (!existsSync(envPath)) {
   console.log("Kept existing .env.");
 }
 
-run(process.execPath, [join(repoRoot, "scripts", "install-shared-skills.mjs")]);
 console.log(
-  "\nSetup complete. Edit .env, authenticate the selected agent CLI, then run: pnpm run doctor",
+  "\nSetup complete. Edit .env, authenticate the selected agent CLI, install the pr-feedback and pr-reviewer skills from vstack into your harness, then run: pnpm run doctor",
 );
 
 function run(command, args) {

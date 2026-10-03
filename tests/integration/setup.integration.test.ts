@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -19,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-test("clean setup builds production output and links every portable skill", () => {
+test("clean setup builds production output and keeps an existing .env", () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-clean-setup-"));
   const checkout = join(root, "checkout");
   const testHome = join(root, "home");
@@ -35,7 +34,7 @@ test("clean setup builds production output and links every portable skill", () =
     ]) {
       copyFileSync(join(repoRoot, file), join(checkout, file));
     }
-    for (const directory of ["scripts", "skills", "src"]) {
+    for (const directory of ["scripts", "src"]) {
       cpSync(join(repoRoot, directory), join(checkout, directory), {
         recursive: true,
       });
@@ -53,16 +52,6 @@ test("clean setup builds production output and links every portable skill", () =
       readFileSync(join(checkout, ".env"), "utf8"),
       readFileSync(join(checkout, ".env.example"), "utf8"),
     );
-
-    const skillNames = ["model-orchestrator", "pr-reviewer"];
-    for (const runtime of [".codex", ".claude", ".cursor"]) {
-      for (const skillName of skillNames) {
-        assert.equal(
-          realpathSync(join(testHome, runtime, "skills", skillName)),
-          realpathSync(join(checkout, "skills", skillName)),
-        );
-      }
-    }
 
     writeFileSync(join(checkout, ".env"), "KEEP_EXISTING=true\n");
     const second = runSetup(checkout, testHome);

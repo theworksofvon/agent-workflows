@@ -12,8 +12,7 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "skills:install": "node scripts/install-shared-skills.mjs",
-    "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs && node --check scripts/install-shared-skills.mjs",
+    "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs",
     "dev": "tsx watch src/main.ts",
     "build": "tsc",
     "start": "node --enable-source-maps dist/main.js",
@@ -23,7 +22,6 @@
     "test:unit": "node --import tsx --test \"tests/unit/*.test.ts\"",
     "test:integration": "node --import tsx --test \"tests/integration/*.test.ts\"",
     "test:smoke": "node dist/main.js --help && node dist/main.js help && node dist/main.js review --help && node dist/main.js webhooks --help && node dist/main.js service --help",
-    "test:python": "python3 -m unittest discover -s skills/model-orchestrator/tests -p 'test_*.py'",
     "typecheck": "tsc --noEmit",
     "test:typecheck": "tsc --project tsconfig.tests.json",
     "lint": "eslint src tests scripts eslint.config.js",

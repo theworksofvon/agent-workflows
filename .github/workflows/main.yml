@@ -35,16 +35,12 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test:typecheck
       - run: pnpm build
       - run: pnpm test
       - run: pnpm test:smoke
-      - run: pnpm test:python
 
   quality:
     name: Main Quality Gates
@@ -63,7 +59,6 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm check:scripts
-      - run: shellcheck scripts/*.sh
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 
