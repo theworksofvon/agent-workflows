@@ -12,11 +12,8 @@ import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
 import { Daemon } from "./services/daemon.js";
 import { log } from "./log.js";
 import { parseReviewTarget } from "./domain/target.js";
-import { PullRequestReviewWorkflow } from "./services/review-pr.js";
-import type {
-  PullRequestReviewRunResult,
-  RunPullRequestReviewOptions,
-} from "./services/review-pr.js";
+import { reviewPullRequest } from "./services/review-pr.js";
+import type { ReviewRunResult } from "./services/review-pr.js";
 
 export interface CliDependencies {
   loadConfig(options: { requireRepos: boolean }): Config;
@@ -32,7 +29,7 @@ export interface CliDependencies {
     client: GitHubClient;
     agent: AgentAdapter;
   }): Pick<Daemon, "start" | "stop">;
-  createReviewWorkflow(): Pick<PullRequestReviewWorkflow, "run">;
+  reviewPullRequest: typeof reviewPullRequest;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
   writeLine(line: string): void;
@@ -57,7 +54,7 @@ export const defaultCliDependencies: CliDependencies = {
       },
       poll,
     ),
-  createReviewWorkflow: () => new PullRequestReviewWorkflow(),
+  reviewPullRequest,
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
   writeLine: console.log,
@@ -163,21 +160,22 @@ export async function runReviewCommand(
     adversarialMode === "off"
       ? undefined
       : dependencies.getAgent(config.reviewAdversarialAgent, config);
-  const workflow = dependencies.createReviewWorkflow();
-  const result = await workflow.run({
+  const result = await dependencies.reviewPullRequest({
     config,
-    client,
+    github: client,
+    git: gitExec,
+    state: jsonFileState(config),
     agent,
     adversarialAgent,
     adversarialMode,
     target: parseReviewTarget(targetArg),
     post,
-  } satisfies RunPullRequestReviewOptions);
+  });
   printReviewResult(result, dependencies.writeLine);
 }
 
 export function printReviewResult(
-  result: PullRequestReviewRunResult,
+  result: ReviewRunResult,
   writeLine: (line: string) => void = console.log,
 ): void {
   const slug = `${result.target.repo.owner}/${result.target.repo.repo}#${result.target.prNumber}`;

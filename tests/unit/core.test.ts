@@ -26,8 +26,8 @@ import {
   type CliDependencies,
 } from "../../src/main.js";
 import type {
-  PullRequestReviewRunResult,
-  RunPullRequestReviewOptions,
+  ReviewRunResult,
+  ReviewOptions,
 } from "../../src/services/review-pr.js";
 
 const CONFIG_KEYS = [
@@ -974,8 +974,8 @@ test("Daemon restart while the first start is polling keeps one timer chain", as
 });
 
 function reviewResult(
-  overrides: Partial<PullRequestReviewRunResult> = {},
-): PullRequestReviewRunResult {
+  overrides: Partial<ReviewRunResult> = {},
+): ReviewRunResult {
   return {
     target: { repo: { owner: "owner", repo: "repo" }, prNumber: 7 },
     dryRun: true,
@@ -1020,12 +1020,10 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
         calls.push("stopped");
       },
     }),
-    createReviewWorkflow: () => ({
-      async run() {
-        calls.push("reviewed");
-        return reviewResult();
-      },
-    }),
+    reviewPullRequest: async () => {
+      calls.push("reviewed");
+      return reviewResult();
+    },
     onSignal: (signal, listener) => {
       signals.set(signal, listener);
     },
@@ -1132,18 +1130,16 @@ test("review CLI validates flags, selects adversarial policy, and prints every r
     );
   }
 
-  const observed: RunPullRequestReviewOptions[] = [];
+  const observed: ReviewOptions[] = [];
   const make = (mode: Config["reviewAdversarialMode"]) => {
     const config = makeConfig();
     config.reviewAdversarialMode = mode;
     return fakeCli({
       loadConfig: () => config,
-      createReviewWorkflow: () => ({
-        async run(options) {
-          observed.push(options);
-          return reviewResult();
-        },
-      }),
+      reviewPullRequest: async (options) => {
+        observed.push(options);
+        return reviewResult();
+      },
     });
   };
   await runReviewCommand(["owner/repo#7"], make("auto").dependencies);
@@ -1210,12 +1206,11 @@ test("default CLI factories construct local runtime objects without external cal
     client,
     agent,
   });
-  const workflow = defaultCliDependencies.createReviewWorkflow();
   assert.ok(client.octokit);
   assert.equal(agent.name, "codex");
   assert.deepEqual(await poll(), []);
   assert.equal(typeof daemon.start, "function");
-  assert.equal(typeof workflow.run, "function");
+  assert.equal(typeof defaultCliDependencies.reviewPullRequest, "function");
 });
 
 test("CLI public helpers retain safe default dependencies on validation/help paths", async () => {

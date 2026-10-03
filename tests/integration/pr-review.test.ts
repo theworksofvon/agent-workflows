@@ -13,9 +13,15 @@ import type { Config } from "../../src/config.js";
 import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
 import { buildReviewPrompt } from "../../src/services/review-prompt.js";
 import {
-  parseRightSidePatchLines,
-  PullRequestReviewWorkflow,
+  reviewPullRequest,
+  type ReviewOptions,
 } from "../../src/services/review-pr.js";
+import { gitExec } from "../../src/adapters/git/exec.js";
+import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import {
+  DraftPullRequestError,
+  ReportMissingError,
+} from "../../src/domain/errors.js";
 import {
   findingFingerprint,
   parseReviewResult,
@@ -96,23 +102,53 @@ function makeContext(): ReviewContext {
   };
 }
 
+const REPORT_PATH =
+  /write the review JSON described by that skill to (\S+) before/i;
+const RELAUNCH_PATH = /report at (\S+) is missing/;
+
+function reportPathOf(prompt: string): string {
+  const match = REPORT_PATH.exec(prompt) ?? RELAUNCH_PATH.exec(prompt);
+  assert.ok(match, "prompt names a report path");
+  return match[1];
+}
+
+function writeReport(prompt: string, text: string): void {
+  writeFileSync(reportPathOf(prompt), text);
+}
+
+type ReviewArgs = Omit<ReviewOptions, "git" | "state" | "github"> & {
+  client: FakeReviewClient;
+};
+
+function runReview(args: ReviewArgs) {
+  const { client, ...rest } = args;
+  return reviewPullRequest({
+    ...rest,
+    github: client,
+    git: gitExec,
+    state: jsonFileState(args.config),
+  });
+}
+
 class FakeAgent implements AgentAdapter {
   readonly name = "fake";
 
   constructor(
     private readonly result: ReviewResult,
-    private readonly opts: { dirty?: boolean; exitCode?: number } = {},
+    private readonly opts: {
+      dirty?: boolean;
+      exitCode?: number;
+      silent?: boolean;
+    } = {},
   ) {}
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     if (this.opts.dirty) {
       writeFileSync(join(input.workdir, "agent-output.txt"), "dirty\n");
     }
-    return {
-      exitCode: this.opts.exitCode ?? 0,
-      stdout: JSON.stringify(this.result),
-      stderr: "",
-    };
+    if (!this.opts.silent)
+      writeReport(input.prompt, JSON.stringify(this.result));
+    return { exitCode: this.opts.exitCode ?? 0, stdout: "", stderr: "" };
   }
 }
 
@@ -188,13 +224,15 @@ test("parseReviewTarget handles owner/repo slug and GitHub PR URL", () => {
 });
 
 test("buildReviewPrompt includes read-only review contract and changed file context", () => {
-  const prompt = buildReviewPrompt(makeContext());
-  assert.match(prompt, /review-only engineer/);
-  assert.match(prompt, /do not edit files, commit, push/);
+  const prompt = buildReviewPrompt(makeContext(), "/run/primary-report.json");
+  assert.match(prompt, /Use the pr-reviewer skill\./);
+  assert.match(prompt, /without editing files, committing, or pushing/);
+  assert.match(
+    prompt,
+    /review JSON described by that skill to \/run\/primary-report\.json before you exit\. This file is mandatory\./,
+  );
   assert.match(prompt, /src\/example\.ts/);
-  assert.match(prompt, /Return JSON only/);
-  assert.match(prompt, /critical\|high\|medium\|low/);
-  assert.match(prompt, /embedded \$pr-reviewer skill contract/);
+  assert.doesNotMatch(prompt, /review-only engineer/);
 });
 
 test("auto adversarial review is gated by deterministic risk signals", () => {
@@ -221,7 +259,7 @@ test("auto adversarial review is gated by deterministic risk signals", () => {
 });
 
 test("adversarial prompt omits duplicated patches and marks primary output untrusted", () => {
-  const prompt = buildReviewPrompt(makeContext(), {
+  const prompt = buildReviewPrompt(makeContext(), "/r.json", {
     role: "adversarial",
     primaryReview: { summary: "Primary", findings: [] },
     includePatches: false,
@@ -264,11 +302,12 @@ test("adversarial pass receives the primary result and becomes the final review"
       name: "adversarial-fake",
       async run(input): Promise<AgentRunResult> {
         adversarialPrompt = input.prompt;
-        return { exitCode: 0, stdout: JSON.stringify(adversarial), stderr: "" };
+        writeReport(input.prompt, JSON.stringify(adversarial));
+        return { exitCode: 0, stdout: "", stderr: "" };
       },
     };
     const client = new FakeReviewClient();
-    const result = await new PullRequestReviewWorkflow().run({
+    const result = await runReview({
       config: makeConfig(root),
       client,
       agent: new FakeAgent(primary),
@@ -327,8 +366,7 @@ test("dry-run review runs agent and does not post or persist duplicate state", a
     const remote = createBareRemote(root);
     const client = new FakeReviewClient();
     const config = makeConfig(root);
-    const workflow = new PullRequestReviewWorkflow();
-    const result = await workflow.run({
+    const result = await runReview({
       config,
       client,
       agent: new FakeAgent({
@@ -370,7 +408,6 @@ test("post mode submits one grouped review and skips duplicate findings later", 
     const remote = createBareRemote(root);
     const client = new FakeReviewClient();
     const config = makeConfig(root);
-    const workflow = new PullRequestReviewWorkflow();
     const reviewResult: ReviewResult = {
       summary: "One issue",
       findings: [
@@ -387,7 +424,7 @@ test("post mode submits one grouped review and skips duplicate findings later", 
       prNumber: 1,
     };
 
-    const first = await workflow.run({
+    const first = await runReview({
       config,
       client,
       agent: new FakeAgent(reviewResult),
@@ -395,7 +432,7 @@ test("post mode submits one grouped review and skips duplicate findings later", 
       post: true,
       cloneUrlOverride: remote,
     });
-    const second = await workflow.run({
+    const second = await runReview({
       config,
       client,
       agent: new FakeAgent(reviewResult),
@@ -429,7 +466,7 @@ test("post mode skips findings that cannot attach to the PR diff", async () => {
     const remote = createBareRemote(root);
     const client = new FakeReviewClient();
     const config = makeConfig(root);
-    const result = await new PullRequestReviewWorkflow().run({
+    const result = await runReview({
       config,
       client,
       agent: new FakeAgent({
@@ -472,7 +509,7 @@ test("post mode keeps valid diff findings while skipping invalid ones", async ()
   try {
     const remote = createBareRemote(root);
     const client = new FakeReviewClient();
-    const result = await new PullRequestReviewWorkflow().run({
+    const result = await runReview({
       config: makeConfig(root),
       client,
       agent: new FakeAgent({
@@ -521,10 +558,9 @@ test("dirty worktree review fails without posting", async () => {
   try {
     const remote = createBareRemote(root);
     const client = new FakeReviewClient();
-    const workflow = new PullRequestReviewWorkflow();
     await assert.rejects(
       () =>
-        workflow.run({
+        runReview({
           config: makeConfig(root),
           client,
           agent: new FakeAgent(
@@ -577,17 +613,13 @@ test("draft PR review fails before running agent or posting", async () => {
       name: "fake",
       async run(): Promise<AgentRunResult> {
         agentRan = true;
-        return {
-          exitCode: 0,
-          stdout: JSON.stringify({ summary: "ok", findings: [] }),
-          stderr: "",
-        };
+        return { exitCode: 0, stdout: "", stderr: "" };
       },
     };
 
     await assert.rejects(
       () =>
-        new PullRequestReviewWorkflow().run({
+        runReview({
           config: makeConfig(root),
           client,
           agent,
@@ -597,7 +629,7 @@ test("draft PR review fails before running agent or posting", async () => {
           },
           post: true,
         }),
-      /is a draft/,
+      DraftPullRequestError,
     );
     assert.equal(agentRan, false);
     assert.equal(client.postedReviews.length, 0);
@@ -702,11 +734,11 @@ test("review prompt handles missing descriptions/patches and enforces adversaria
   const context = makeContext();
   context.body = null;
   context.files[0].patch = null;
-  const prompt = buildReviewPrompt(context);
+  const prompt = buildReviewPrompt(context, "/r.json");
   assert.doesNotMatch(prompt, /PR description/);
   assert.match(prompt, /Patch: unavailable/);
   assert.throws(
-    () => buildReviewPrompt(context, { role: "adversarial" }),
+    () => buildReviewPrompt(context, "/r.json", { role: "adversarial" }),
     /requires the primary review/,
   );
 });
@@ -754,27 +786,6 @@ test("risk policy covers explicit modes and all automatic risk signals", () => {
   ]);
 });
 
-test("right-side patch parsing tracks context/additions and ignores metadata/deletions", () => {
-  assert.deepEqual([...parseRightSidePatchLines(null)], []);
-  assert.deepEqual(
-    [
-      ...parseRightSidePatchLines(
-        [
-          "metadata before hunk",
-          "@@ -1,2 +10,4 @@ heading",
-          " context",
-          "-deleted",
-          "+added",
-          "\\ No newline at end of file",
-          "unexpected metadata",
-          "+after metadata",
-        ].join("\n"),
-      ),
-    ],
-    [10, 11, 13],
-  );
-});
-
 test("review workflow reports missing adversarial adapters, agent failures, and malformed output", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-pr-review-errors-"));
   try {
@@ -789,7 +800,7 @@ test("review workflow reports missing adversarial adapters, agent failures, and 
       post: false,
       cloneUrlOverride: remote,
     };
-    const missing = await new PullRequestReviewWorkflow().run({
+    const missing = await runReview({
       ...base,
       agent: new FakeAgent({ summary: "ok", findings: [] }),
       adversarialMode: "always",
@@ -799,7 +810,7 @@ test("review workflow reports missing adversarial adapters, agent failures, and 
 
     await assert.rejects(
       () =>
-        new PullRequestReviewWorkflow().run({
+        runReview({
           ...base,
           agent: new FakeAgent(
             { summary: "bad", findings: [] },
@@ -811,14 +822,90 @@ test("review workflow reports missing adversarial adapters, agent failures, and 
 
     const malformed: AgentAdapter = {
       name: "malformed",
-      async run() {
-        return { exitCode: 0, stdout: "not-json", stderr: "parse details" };
+      async run(input) {
+        writeReport(input.prompt, "not-json");
+        return { exitCode: 0, stdout: "", stderr: "parse details" };
       },
     };
     await assert.rejects(
-      () => new PullRequestReviewWorkflow().run({ ...base, agent: malformed }),
+      () => runReview({ ...base, agent: malformed }),
       /Failed to parse primary review agent output/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("missing report is requested once more, then fails with ReportMissingError", async () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "agent-workflows-pr-review-missing-"),
+  );
+  try {
+    const remote = createBareRemote(root);
+    const prompts: string[] = [];
+    const agent: AgentAdapter = {
+      name: "silent",
+      async run(input) {
+        prompts.push(input.prompt);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    await assert.rejects(
+      () =>
+        runReview({
+          config: makeConfig(root),
+          client: new FakeReviewClient(),
+          agent,
+          target: {
+            repo: { owner: "local-owner", repo: "sample-repo" },
+            prNumber: 1,
+          },
+          post: false,
+          cloneUrlOverride: remote,
+        }),
+      ReportMissingError,
+    );
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0], /Use the pr-reviewer skill\./);
+    assert.match(prompts[1], /is missing/);
+    assert.match(prompts[1], /pr-reviewer skill's output schema/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("relaunch recovers when the agent writes the report the second time", async () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "agent-workflows-pr-review-relaunch-"),
+  );
+  try {
+    const remote = createBareRemote(root);
+    let calls = 0;
+    const agent: AgentAdapter = {
+      name: "late",
+      async run(input) {
+        calls += 1;
+        if (calls === 2)
+          writeReport(
+            input.prompt,
+            JSON.stringify({ summary: "late", findings: [] }),
+          );
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runReview({
+      config: makeConfig(root),
+      client: new FakeReviewClient(),
+      agent,
+      target: {
+        repo: { owner: "local-owner", repo: "sample-repo" },
+        prNumber: 1,
+      },
+      post: false,
+      cloneUrlOverride: remote,
+    });
+    assert.equal(result.review.summary, "late");
+    assert.equal(calls, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

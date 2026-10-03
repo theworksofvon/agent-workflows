@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { ReviewResult } from "../domain/decisions.js";
 import type { ReviewContext } from "../domain/events.js";
 
@@ -9,24 +7,16 @@ export interface BuildReviewPromptOptions {
   includePatches?: boolean;
 }
 
-const skillPath = fileURLToPath(
-  new URL("../../skills/pr-reviewer/SKILL.md", import.meta.url),
-);
-const reviewSkill = stripFrontmatter(readFileSync(skillPath, "utf8"));
-
 export function buildReviewPrompt(
   ctx: ReviewContext,
+  reportPath: string,
   options: BuildReviewPromptOptions = {},
 ): string {
   const role = options.role ?? "primary";
   const includePatches = options.includePatches ?? true;
   const lines: string[] = [
-    "Follow the embedded $pr-reviewer skill contract below.",
-    "This contract is embedded so it works consistently across agent adapters.",
-    "",
-    "--- pr-reviewer skill ---",
-    reviewSkill,
-    "--- end pr-reviewer skill ---",
+    "Use the pr-reviewer skill. Review this pull request without editing files, committing, or pushing.",
+    `Write the review JSON described by that skill to ${reportPath} before you exit. This file is mandatory.`,
     "",
     `Review role: ${role}`,
   ];
@@ -82,8 +72,4 @@ export function buildReviewPrompt(
   lines.push("--- end changed files ---");
 
   return lines.join("\n");
-}
-
-function stripFrontmatter(markdown: string): string {
-  return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
 }
