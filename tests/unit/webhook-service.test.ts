@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../../src/config.js";
@@ -288,7 +288,7 @@ test("an issue_comment on a fetched draft or fork PR is ignored", async () => {
   }
 });
 
-test("a delivery for an unwatched repo is recorded but not ingested", async () => {
+test("a delivery for an unwatched repo never touches state", async () => {
   const h = harness({ repos: [{ owner: "o", repo: "other" }] });
   try {
     const result = await receiveDelivery(
@@ -302,7 +302,35 @@ test("a delivery for an unwatched repo is recorded but not ingested", async () =
       ready: [],
     });
     assert.deepEqual(h.fetches, []);
-    assert.equal(h.stores.get("o/r")?.hasSeenDelivery("d1"), true);
+    assert.equal(h.stores.size, 0);
+    assert.equal(
+      existsSync(join(h.ports.config.stateDir, "github", "o")),
+      false,
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("repo matching ignores case and keys state by the config's casing", async () => {
+  const h = harness({ repos: [{ owner: "Owner", repo: "Repo" }] });
+  try {
+    const result = await receiveDelivery(
+      delivery("pull_request_review_comment", {
+        ...reviewCommentPayload,
+        repository: { name: "repo", owner: { login: "owner" } },
+      }),
+      h.ports,
+    );
+    assert.equal(result.reason, "accepted");
+    assert.deepEqual(result.ready[0].repo, { owner: "Owner", repo: "Repo" });
+    assert.equal(result.ready[0].comments[0].key, "Owner/Repo#4:review:5");
+    const stateDir = h.ports.config.stateDir;
+    assert.deepEqual(readdirSync(join(stateDir, "github")), ["Owner"]);
+    assert.deepEqual(readdirSync(join(stateDir, "github", "Owner")), [
+      "Repo.json",
+    ]);
+    assert.equal(h.stores.get("Owner/Repo")?.hasSeenDelivery("d1"), true);
   } finally {
     h.cleanup();
   }

@@ -20,22 +20,39 @@ export type NormalizeResult =
     }
   | { kind: "ignored"; reason: string };
 
-interface UserPayload {
-  login?: string;
+/** Maps the payload's repo to the watched repo it names, or null when unwatched. */
+export type RepoResolver = (repo: RepoRef) => RepoRef | null;
+
+interface DeliveryPayload {
+  action?: unknown;
+  issue?: unknown;
+  comment?: unknown;
+  review?: unknown;
+  pull_request?: unknown;
+}
+
+interface IssuePayload {
+  number: number;
+  pull_request?: unknown;
+}
+
+interface RefPayload {
+  ref: string;
+  repo?: unknown;
 }
 
 interface PullRequestPayload {
   number: number;
   title: string;
   body: string | null;
-  draft: boolean;
-  head: { ref: string; repo: { full_name: string } | null };
-  base: { ref: string; repo: { full_name: string } | null };
+  draft?: unknown;
+  head: RefPayload;
+  base: RefPayload;
 }
 
 interface IssueCommentPayload {
   id: number;
-  user: UserPayload | null;
+  user?: unknown;
   body: string;
   created_at: string;
 }
@@ -50,38 +67,36 @@ interface ReviewCommentPayload extends IssueCommentPayload {
 
 interface ReviewPayload {
   id: number;
-  user: UserPayload | null;
+  user?: unknown;
   body: string | null;
   submitted_at: string;
 }
 
-interface DeliveryPayload {
-  action: string;
-  issue: { number: number; pull_request?: unknown };
-  comment: IssueCommentPayload & ReviewCommentPayload;
-  review: ReviewPayload;
-  pull_request: PullRequestPayload;
-}
-
 /**
  * Turns one GitHub webhook delivery into the domain events the poller would
- * have produced. Payload shapes are trusted once the signature has been
- * verified; only the fields the rules branch on are checked.
+ * have produced. Every object and field the events are built from is checked;
+ * a payload that does not match is ignored as malformed rather than thrown on.
+ * The resolved repo, not the payload's casing, keys the events.
  */
 export function normalizeDelivery(
   event: string,
   payload: unknown,
+  resolveRepo: RepoResolver = (repo) => repo,
 ): NormalizeResult {
   if (!isWebhookEvent(event)) return ignored("unsupported-event");
-  const repo = repoOf(payload);
-  if (!repo) return ignored("missing-repository");
+  const payloadRepo = repoOf(payload);
+  if (!payloadRepo) return ignored("missing-repository");
+  const repo = resolveRepo(payloadRepo);
+  if (!repo) return ignored("repo-not-watched");
   const p = payload as DeliveryPayload;
 
   if (event === "issue_comment") {
     if (p.action !== "created") return ignored("uninteresting-action");
+    if (!isIssue(p.issue)) return ignored("malformed-payload");
     if (!p.issue.pull_request) return ignored("not-a-pull-request");
-    const n = p.issue.number;
     const c = p.comment;
+    if (!isIssueComment(c)) return ignored("malformed-payload");
+    const n = p.issue.number;
     return {
       kind: "needs_pull_request",
       prNumber: n,
@@ -103,8 +118,9 @@ export function normalizeDelivery(
     };
   }
 
-  const wanted = WANTED_ACTIONS[event];
-  if (!wanted.includes(p.action)) return ignored("uninteresting-action");
+  if (!WANTED_ACTIONS[event].includes(p.action as string))
+    return ignored("uninteresting-action");
+  if (!isPullRequest(p.pull_request)) return ignored("malformed-payload");
   const pr = pullRequestOf(repo, p.pull_request);
   if (pr.draft) return ignored("draft");
   if (pr.fromFork) return ignored("fork");
@@ -115,6 +131,7 @@ export function normalizeDelivery(
 
   if (event === "pull_request_review") {
     const r = p.review;
+    if (!isReview(r)) return ignored("malformed-payload");
     if (!r.body) return ignored("empty-review-body");
     return {
       kind: "events",
@@ -136,6 +153,7 @@ export function normalizeDelivery(
   }
 
   const c = p.comment;
+  if (!isReviewComment(c)) return ignored("malformed-payload");
   return {
     kind: "events",
     events: [
@@ -178,10 +196,6 @@ function isWebhookEvent(event: string): event is WebhookEvent {
   return (WEBHOOK_EVENTS as readonly string[]).includes(event);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function repoOf(payload: unknown): RepoRef | null {
   if (!isRecord(payload) || !isRecord(payload.repository)) return null;
   const { name, owner } = payload.repository;
@@ -198,12 +212,86 @@ function pullRequestOf(repo: RepoRef, raw: PullRequestPayload): PullRequest {
     body: raw.body,
     headRef: raw.head.ref,
     baseRef: raw.base.ref,
-    draft: raw.draft,
-    // A deleted head repo arrives as null; treat it as foreign.
-    fromFork: raw.head.repo?.full_name !== raw.base.repo?.full_name,
+    draft: raw.draft === true,
+    fromFork: isFromFork(raw),
   };
 }
 
-function authorOf(user: UserPayload | null): string {
-  return user?.login ?? "unknown";
+/** Fails closed: a missing (e.g. deleted) head repo counts as a fork. */
+function isFromFork(raw: PullRequestPayload): boolean {
+  const head = fullNameOf(raw.head);
+  return head === null || head !== fullNameOf(raw.base);
+}
+
+function fullNameOf(ref: RefPayload): string | null {
+  return isRecord(ref.repo) && typeof ref.repo.full_name === "string"
+    ? ref.repo.full_name
+    : null;
+}
+
+function authorOf(user: unknown): string {
+  return isRecord(user) && typeof user.login === "string"
+    ? user.login
+    : "unknown";
+}
+
+function isIssue(value: unknown): value is IssuePayload {
+  return isRecord(value) && typeof value.number === "number";
+}
+
+function isPullRequest(value: unknown): value is PullRequestPayload {
+  return (
+    isRecord(value) &&
+    typeof value.number === "number" &&
+    typeof value.title === "string" &&
+    isStringOrNull(value.body) &&
+    isRef(value.head) &&
+    isRef(value.base)
+  );
+}
+
+function isRef(value: unknown): value is RefPayload {
+  return isRecord(value) && typeof value.ref === "string";
+}
+
+function isIssueComment(value: unknown): value is IssueCommentPayload {
+  return (
+    isRecord(value) &&
+    typeof value.id === "number" &&
+    typeof value.body === "string" &&
+    typeof value.created_at === "string"
+  );
+}
+
+function isReviewComment(value: unknown): value is ReviewCommentPayload {
+  if (!isIssueComment(value)) return false;
+  const fields = value as unknown as Record<string, unknown>;
+  return (
+    typeof fields.path === "string" &&
+    typeof fields.diff_hunk === "string" &&
+    isNumberOrNull(fields.line) &&
+    isNumberOrNull(fields.original_line) &&
+    isNumberOrNull(fields.pull_request_review_id)
+  );
+}
+
+function isReview(value: unknown): value is ReviewPayload {
+  return (
+    isRecord(value) &&
+    typeof value.id === "number" &&
+    isStringOrNull(value.body) &&
+    typeof value.submitted_at === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isStringOrNull(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isNumberOrNull(value: unknown): boolean {
+  return value === null || typeof value === "number";
 }

@@ -296,3 +296,69 @@ test("events on a fork PR are ignored, including a deleted head repo", () => {
     );
   }
 });
+
+test("payloads missing or mistyping a field the events need are malformed", () => {
+  const issueCase = issueComment();
+  const reviewCase = review();
+  const cases: Array<[string, unknown]> = [
+    ["issue_comment", { ...issueCase, issue: undefined }],
+    ["issue_comment", { ...issueCase, comment: { id: 7 } }],
+    [
+      "pull_request_review_comment",
+      { action: "created", repository, comment: reviewComment() },
+    ],
+    [
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository,
+        comment: reviewComment({ path: undefined }),
+        pull_request: rawPr(),
+      },
+    ],
+    [
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository,
+        comment: reviewComment({ id: "5" }),
+        pull_request: rawPr(),
+      },
+    ],
+    [
+      "pull_request",
+      {
+        action: "opened",
+        repository,
+        pull_request: rawPr({ head: undefined }),
+      },
+    ],
+    ["pull_request_review", { ...reviewCase, review: undefined }],
+    [
+      "pull_request",
+      { action: "opened", repository, pull_request: rawPr({ title: 4 }) },
+    ],
+  ];
+  for (const [event, payload] of cases) {
+    assert.deepEqual(normalizeDelivery(event, payload), {
+      kind: "ignored",
+      reason: "malformed-payload",
+    });
+  }
+});
+
+test("a repo the resolver rejects is not watched; a resolved repo keys events", () => {
+  const payload = { action: "opened", repository, pull_request: rawPr() };
+  assert.deepEqual(
+    normalizeDelivery("pull_request", payload, () => null),
+    { kind: "ignored", reason: "repo-not-watched" },
+  );
+  const canonical = { owner: "O", repo: "R" };
+  assert.deepEqual(
+    normalizeDelivery("pull_request", payload, () => canonical),
+    {
+      kind: "events",
+      events: [{ kind: "pull_request_ready", pr: { ...pr, repo: canonical } }],
+    },
+  );
+});

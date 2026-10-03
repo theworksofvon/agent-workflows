@@ -361,9 +361,8 @@ export class GitHubClient implements GitHubPort {
 
 function isFromFork(p: PullRequestApiRecord): boolean {
   const head = p.head.repo?.full_name;
-  const base = p.base.repo?.full_name;
-  if (head === undefined || base === undefined) return false;
-  return head !== base;
+  if (head === undefined) return true;
+  return head !== p.base.repo?.full_name;
 }
 
 function hookConfig(args: {

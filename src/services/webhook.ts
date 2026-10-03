@@ -39,9 +39,9 @@ export function verifyWebhookSignature(
 }
 
 /**
- * Verifies, dedupes, and normalizes one delivery, then feeds its comments
- * through the same intake and batching the poller uses. The delivery id is
- * recorded before the watched-repo check so a replay is always a duplicate.
+ * Verifies, normalizes, and dedupes one delivery, then feeds its comments
+ * through the same intake and batching the poller uses. Unwatched repos are
+ * rejected before any state is touched.
  */
 export async function receiveDelivery(
   delivery: RawDelivery,
@@ -65,7 +65,9 @@ export async function receiveDelivery(
     return reply(400, "bad-json");
   }
 
-  const normalized = normalizeDelivery(delivery.event, payload);
+  const normalized = normalizeDelivery(delivery.event, payload, (repo) =>
+    watchedRepo(config, repo),
+  );
   if (normalized.kind === "ignored") return reply(202, normalized.reason);
 
   const repo =
@@ -75,7 +77,6 @@ export async function receiveDelivery(
   const state = ports.state(repo);
   if (state.hasSeenDelivery(delivery.id)) return reply(202, "duplicate");
   state.markDeliverySeen(delivery.id);
-  if (!isWatched(config, repo)) return reply(202, "repo-not-watched");
 
   let events = normalized.kind === "events" ? normalized.events : [];
   if (normalized.kind === "needs_pull_request") {
@@ -106,8 +107,12 @@ function reply(status: number, reason: string): WebhookResult {
   return { status, reason, events: [], ready: [] };
 }
 
-function isWatched(config: Config, repo: RepoRef): boolean {
-  return config.repos.some(
-    (r) => r.owner === repo.owner && r.repo === repo.repo,
+/** GitHub names are case-insensitive; the config's casing keys state. */
+function watchedRepo(config: Config, repo: RepoRef): RepoRef | null {
+  const owner = repo.owner.toLowerCase();
+  const name = repo.repo.toLowerCase();
+  const spec = config.repos.find(
+    (r) => r.owner.toLowerCase() === owner && r.repo.toLowerCase() === name,
   );
+  return spec ? { owner: spec.owner, repo: spec.repo } : null;
 }

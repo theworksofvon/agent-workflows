@@ -423,6 +423,14 @@ function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
                 base: { ref: "b2", repo: { full_name: "owner/repo" } },
                 draft: true,
               },
+              {
+                number: 6,
+                title: "Six",
+                body: null,
+                head: { ref: "h6", repo: null },
+                base: { ref: "b6", repo: { full_name: "owner/repo" } },
+                draft: false,
+              },
             ],
           };
         },
@@ -590,7 +598,7 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
       headRef: "head",
       baseRef: "base",
       draft: false,
-      fromFork: false,
+      fromFork: true,
     },
     {
       repo: ref,
@@ -600,6 +608,16 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
       headRef: "h2",
       baseRef: "b2",
       draft: true,
+      fromFork: true,
+    },
+    {
+      repo: ref,
+      number: 6,
+      title: "Six",
+      body: null,
+      headRef: "h6",
+      baseRef: "b6",
+      draft: false,
       fromFork: true,
     },
   ]);
