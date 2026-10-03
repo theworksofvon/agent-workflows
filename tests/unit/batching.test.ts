@@ -6,8 +6,9 @@ import {
   dropReason,
   groupKeyFor,
   isRetryableAgentFailure,
+  summarizeBatch,
 } from "../../src/domain/batching.js";
-import type { Comment } from "../../src/domain/events.js";
+import type { Comment, CommentBatch } from "../../src/domain/events.js";
 
 const base: Comment = {
   key: "k",
@@ -63,4 +64,28 @@ test("dropReason applies self, bot, and allowlist rules", () => {
 test("isRetryableAgentFailure matches quota signatures", () => {
   assert.equal(isRetryableAgentFailure("HTTP 429 Too Many Requests"), true);
   assert.equal(isRetryableAgentFailure("syntax error"), false);
+});
+
+test("summarizeBatch names authors, caps listed files at five, and reports commits", () => {
+  const files = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts"];
+  const batch = {
+    comments: [
+      ...files.map((path, i) => ({
+        ...base,
+        id: i,
+        kind: "review" as const,
+        author: i === 0 ? "alice" : "bob",
+        review: { path, line: 1, diffHunk: "@@" },
+      })),
+      { ...base, id: 9, author: "bob" },
+    ],
+  } as CommentBatch;
+  assert.equal(
+    summarizeBatch(batch, 0),
+    "Handled batch from @alice, @bob with 7 comment(s) on a.ts, b.ts, c.ts, d.ts, e.ts and 1 more file(s); produced no commits",
+  );
+  assert.equal(
+    summarizeBatch({ comments: [base] } as CommentBatch, 2),
+    "Handled batch from @alice with 1 comment(s); produced 2 commit(s)",
+  );
 });

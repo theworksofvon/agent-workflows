@@ -11,6 +11,7 @@ import {
   type GitHubApi,
 } from "../../src/adapters/github/octokit.js";
 import { Daemon } from "../../src/services/daemon.js";
+import type { FeedbackPorts } from "../../src/services/handle-feedback.js";
 import type { AgentAdapter } from "../../src/adapters/agent/agent.interface.js";
 import type { CommentBatch } from "../../src/domain/events.js";
 import { getAgent } from "../../src/adapters/agent/registry.js";
@@ -51,6 +52,13 @@ const CONFIG_KEYS = [
   "CLAUDE_CODE_BIN",
   "CODEX_BIN",
   "KEEP_WORKDIRS",
+  "HOST",
+  "PORT",
+  "WEBHOOK_SECRET",
+  "PUBLIC_URL",
+  "TAILSCALE_FUNNEL",
+  "MAX_CONCURRENT_RUNS",
+  "AUTO_REVIEW",
 ] as const;
 
 function withEnv(
@@ -100,6 +108,37 @@ function makeConfig(root = tmpdir()): Config {
     claudeCodeBin: "claude-test",
     codexBin: "codex-test",
     keepWorkdirs: false,
+    host: "127.0.0.1",
+    port: 3773,
+    webhookSecret: null,
+    publicUrl: null,
+    tailscaleFunnel: false,
+    maxConcurrentRuns: 3,
+    autoReview: false,
+  };
+}
+
+function daemonPorts(
+  config: Config,
+  github: FeedbackPorts["github"] = {
+    async createComment() {},
+    async replyToReviewComment() {},
+  },
+): FeedbackPorts {
+  const agent: AgentAdapter = {
+    name: "agent",
+    async run() {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return {
+    config,
+    agent,
+    github,
+    git: {} as FeedbackPorts["git"],
+    state: () => {
+      throw new Error("daemon tests inject handleFeedback");
+    },
   };
 }
 
@@ -120,6 +159,14 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
       assert.equal(config.processExistingCommentsOnFirstRun, false);
       assert.equal(config.keepWorkdirs, false);
       assert.equal(config.stateDir, resolve("./state"));
+      assert.equal(config.pollIntervalSec, 300);
+      assert.equal(config.host, "127.0.0.1");
+      assert.equal(config.port, 3773);
+      assert.equal(config.webhookSecret, null);
+      assert.equal(config.publicUrl, null);
+      assert.equal(config.tailscaleFunnel, false);
+      assert.equal(config.maxConcurrentRuns, 3);
+      assert.equal(config.autoReview, false);
     },
   );
 
@@ -149,6 +196,13 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
         CLAUDE_CODE_BIN: " c ",
         CODEX_BIN: " x ",
         KEEP_WORKDIRS: "true",
+        HOST: "0.0.0.0",
+        PORT: "8080",
+        WEBHOOK_SECRET: "s3cret",
+        PUBLIC_URL: "https://hooks.example.com",
+        TAILSCALE_FUNNEL: "true",
+        MAX_CONCURRENT_RUNS: "1",
+        AUTO_REVIEW: "true",
       },
       () => {
         const config = loadConfig({ requireRepos: true });
@@ -161,6 +215,13 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
         assert.equal(config.processExistingCommentsOnFirstRun, true);
         assert.equal(config.keepWorkdirs, true);
         assert.equal(config.zcodeBin, "z");
+        assert.equal(config.host, "0.0.0.0");
+        assert.equal(config.port, 8080);
+        assert.equal(config.webhookSecret, "s3cret");
+        assert.equal(config.publicUrl, "https://hooks.example.com");
+        assert.equal(config.tailscaleFunnel, true);
+        assert.equal(config.maxConcurrentRuns, 1);
+        assert.equal(config.autoReview, true);
       },
     );
     withEnv(
@@ -172,6 +233,19 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
     withEnv({ GITHUB_TOKEN: "token" }, () => {
       assert.deepEqual(loadConfig({ requireRepos: false }).repos, []);
     });
+    withEnv(
+      {
+        GITHUB_TOKEN: "token",
+        PUBLIC_URL: "http://localhost:3773",
+        WEBHOOK_SECRET: "s",
+      },
+      () => {
+        assert.equal(
+          loadConfig({ requireRepos: false }).publicUrl,
+          "http://localhost:3773",
+        );
+      },
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -312,6 +386,39 @@ test("loadConfig rejects every invalid required, repository, enum, and numeric v
     [
       { GITHUB_TOKEN: "x", REPOS: "owner/repo", AGENT_MAX_ATTEMPTS: "0" },
       /AGENT_MAX_ATTEMPTS/,
+    ],
+    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "NaN" }, /PORT/],
+    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "80.5" }, /PORT/],
+    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "0" }, /PORT/],
+    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "65536" }, /PORT/],
+    [
+      { GITHUB_TOKEN: "x", REPOS: "owner/repo", MAX_CONCURRENT_RUNS: "1.5" },
+      /MAX_CONCURRENT_RUNS/,
+    ],
+    [
+      { GITHUB_TOKEN: "x", REPOS: "owner/repo", MAX_CONCURRENT_RUNS: "0" },
+      /MAX_CONCURRENT_RUNS/,
+    ],
+    [
+      {
+        GITHUB_TOKEN: "x",
+        REPOS: "owner/repo",
+        PUBLIC_URL: "ftp://example.com",
+        WEBHOOK_SECRET: "s",
+      },
+      /PUBLIC_URL must start with/,
+    ],
+    [
+      {
+        GITHUB_TOKEN: "x",
+        REPOS: "owner/repo",
+        PUBLIC_URL: "https://example.com",
+      },
+      /WEBHOOK_SECRET is required when webhooks are enabled\./,
+    ],
+    [
+      { GITHUB_TOKEN: "x", REPOS: "owner/repo", TAILSCALE_FUNNEL: "true" },
+      /WEBHOOK_SECRET is required when webhooks are enabled\./,
     ],
     [{ GITHUB_TOKEN: "x", REPOS: "" }, /REPOS must list/],
   ];
@@ -721,7 +828,12 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
   const comments: unknown[] = [];
   let pollCount = 0;
   const daemon = new Daemon(
-    config,
+    daemonPorts(config, {
+      async createComment(...args: unknown[]) {
+        comments.push(args);
+      },
+      async replyToReviewComment() {},
+    }),
     async () => {
       pollCount += 1;
       return [
@@ -730,24 +842,9 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
       ];
     },
     {
-      async createComment(...args: unknown[]) {
-        comments.push(args);
-      },
-    },
-    {
-      name: "fake-agent",
-      async run() {
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
-    },
-    {
-      async handleFeedback(batch, ctx) {
+      async handleFeedback(batch, ports) {
         handled.push(batch.batchId);
-        await ctx.postMarkerComment({
-          repo: { owner: "o", repo: "r" },
-          prNumber: 1,
-          body: "done",
-        });
+        await ports.github.createComment({ owner: "o", repo: "r" }, 1, "done");
       },
     },
   );
@@ -762,35 +859,18 @@ test("Daemon dispatches serial work, reports poll errors, and posts comments", a
   const gate = new Promise<void>((done) => {
     release = done;
   });
-  const agent: AgentAdapter = {
-    name: "agent",
-    async run() {
-      return { exitCode: 0, stdout: "", stderr: "" };
-    },
-  };
-  const client = { async createComment() {} };
-  const overlapping = new Daemon(
-    config,
-    async () => {
-      await gate;
-      return [];
-    },
-    client,
-    agent,
-  );
+  const overlapping = new Daemon(daemonPorts(config), async () => {
+    await gate;
+    return [];
+  });
   const first = overlapping.tick();
   await overlapping.tick();
   release();
   await first;
 
-  const failing = new Daemon(
-    config,
-    async () => {
-      throw new Error("poll broke");
-    },
-    client,
-    agent,
-  );
+  const failing = new Daemon(daemonPorts(config), async () => {
+    throw new Error("poll broke");
+  });
   await failing.tick();
 });
 
@@ -801,17 +881,10 @@ test("Daemon start/stop owns one deterministic recursive timer", async () => {
   const cleared: object[] = [];
   let polls = 0;
   const daemon = new Daemon(
-    config,
+    daemonPorts(config),
     async () => {
       polls += 1;
       return [];
-    },
-    { async createComment() {} },
-    {
-      name: "agent",
-      async run() {
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
     },
     {
       setTimeout: (callback, delay) => {
@@ -840,17 +913,10 @@ test("Daemon start/stop owns one deterministic recursive timer", async () => {
   daemon.stop();
 
   const stopDuringPoll = new Daemon(
-    config,
+    daemonPorts(config),
     async () => {
       stopDuringPoll.stop();
       return [];
-    },
-    { async createComment() {} },
-    {
-      name: "agent",
-      async run() {
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
     },
     {
       setTimeout: () => {
@@ -873,18 +939,11 @@ test("Daemon restart while the first start is polling keeps one timer chain", as
     releaseFirstPoll = resolve;
   });
   const daemon = new Daemon(
-    config,
+    daemonPorts(config),
     async () => {
       polls += 1;
       if (polls === 1) await firstPollGate;
       return [];
-    },
-    { async createComment() {} },
-    {
-      name: "agent",
-      async run() {
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
     },
     {
       setTimeout: (callback) => {

@@ -1,14 +1,14 @@
-import type { Config } from "../config.js";
 import type { CommentBatch } from "../domain/events.js";
-import type { GitHubPort } from "../adapters/github/github.interface.js";
-import type { AgentAdapter } from "../adapters/agent/agent.interface.js";
 import { SerialQueue } from "./queue.js";
-import { handleFeedback, type RunCtx } from "./handle-feedback.js";
+import { handleFeedback, type FeedbackPorts } from "./handle-feedback.js";
 import { log } from "../log.js";
 
 export interface DaemonDependencies {
   queue?: SerialQueue;
-  handleFeedback?: (batch: CommentBatch, ctx: RunCtx) => Promise<void>;
+  handleFeedback?: (
+    batch: CommentBatch,
+    ports: FeedbackPorts,
+  ) => Promise<unknown>;
   setTimeout?: (
     callback: () => void,
     delay: number,
@@ -18,8 +18,7 @@ export interface DaemonDependencies {
 
 /**
  * The daemon: owns the poll loop, the serial queue, and dispatches comment
- * batches to feedback handling. Building the RunCtx (config + agent + the
- * marker-comment helper) happens here so the service stays pure.
+ * batches to feedback handling with the ports it was constructed with.
  */
 export class Daemon {
   private readonly queue: SerialQueue;
@@ -32,10 +31,8 @@ export class Daemon {
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
-    private readonly config: Config,
+    private readonly ports: FeedbackPorts,
     private readonly poll: () => Promise<CommentBatch[]>,
-    private readonly client: Pick<GitHubPort, "createComment">,
-    private readonly agent: AgentAdapter,
     dependencies: DaemonDependencies = {},
   ) {
     this.queue = dependencies.queue ?? new SerialQueue();
@@ -49,8 +46,8 @@ export class Daemon {
     this.running = true;
     const generation = ++this.lifecycleGeneration;
     log.info("daemon started", {
-      agent: this.agent.name,
-      pollIntervalSec: this.config.pollIntervalSec,
+      agent: this.ports.agent.name,
+      pollIntervalSec: this.ports.config.pollIntervalSec,
     });
     // First poll immediately so you don't wait a full interval on launch.
     await this.tick();
@@ -72,7 +69,7 @@ export class Daemon {
       this.tick().finally(() => {
         if (this.isCurrentRun(generation)) this.scheduleNext(generation);
       });
-    }, this.config.pollIntervalSec * 1000);
+    }, this.ports.config.pollIntervalSec * 1000);
   }
 
   private isCurrentRun(generation: number): boolean {
@@ -89,23 +86,14 @@ export class Daemon {
     try {
       const batches = await this.poll();
       for (const batch of batches) {
-        const ctx = this.makeRunCtx();
-        this.queue.enqueue(() => this.handle(batch, ctx));
+        this.queue.enqueue(async () => {
+          await this.handle(batch, this.ports);
+        });
       }
     } catch (err) {
       log.error("poll tick failed", { error: String(err) });
     } finally {
       this.polling = false;
     }
-  }
-
-  private makeRunCtx(): RunCtx {
-    return {
-      config: this.config,
-      agent: this.agent,
-      postMarkerComment: async ({ repo, prNumber, body }) => {
-        await this.client.createComment(repo, prNumber, body);
-      },
-    };
   }
 }

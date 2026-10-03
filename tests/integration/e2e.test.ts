@@ -10,16 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Config } from "../../src/config.js";
-import { Daemon } from "../../src/services/daemon.js";
 import { GitHubClient } from "../../src/adapters/github/octokit.js";
 import { jsonFileState } from "../../src/adapters/state/json-file.js";
 import { pollRepos } from "../../src/services/poll.js";
-import { prepareWorkdir } from "../../src/adapters/git/exec.js";
-import {
-  defaultHandleFeedbackDependencies,
-  handleFeedback,
-  type HandleFeedbackDependencies,
-} from "../../src/services/handle-feedback.js";
+import { gitExec } from "../../src/adapters/git/exec.js";
+import type { GitPort } from "../../src/adapters/git/git.interface.js";
+import { handleFeedback } from "../../src/services/handle-feedback.js";
 
 test("comment delivery runs through HTTP, batching, git, agent, push, and persisted state", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-e2e-"));
@@ -45,33 +41,62 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
     });
     const stateFor = jsonFileState(config);
     const poll = () => pollRepos({ config, client, state: stateFor });
-    const feedbackDependencies: HandleFeedbackDependencies = {
-      ...defaultHandleFeedbackDependencies,
+    const gitPort: GitPort = {
+      ...gitExec,
       prepareWorkdir: (args) =>
-        prepareWorkdir({ ...args, cloneUrlOverride: remote }),
+        gitExec.prepareWorkdir({ ...args, cloneUrlOverride: remote }),
       cleanupWorkdir: (handle, keep) => {
-        defaultHandleFeedbackDependencies.cleanupWorkdir(handle, keep);
+        gitExec.cleanupWorkdir(handle, keep);
         cleanupCompleted = true;
       },
     };
     const agent = {
       name: "fake-agent",
       async run(input: { workdir: string; prompt: string }) {
-        assert.match(input.prompt, /first requested change/);
-        assert.match(input.prompt, /second requested change/);
+        const packetPath = /event packet at (\S+)\./.exec(input.prompt)?.[1];
+        const reportPath = /write your report to (\S+)\./i.exec(
+          input.prompt,
+        )?.[1];
+        assert.ok(packetPath && reportPath);
+        const packet = JSON.parse(readFileSync(packetPath, "utf8")) as {
+          comments: Array<{ key: string; body: string }>;
+        };
+        assert.deepEqual(
+          packet.comments.map((c) => c.body),
+          ["first requested change", "second requested change"],
+        );
         writeFileSync(join(input.workdir, "agent-output.txt"), "implemented\n");
+        writeFileSync(
+          reportPath,
+          JSON.stringify({
+            summary: "done",
+            comments: packet.comments.map((c) => ({
+              key: c.key,
+              decision: "addressed",
+            })),
+          }),
+        );
         return { exitCode: 0, stdout: "done", stderr: "" };
       },
     };
-    const daemon = new Daemon(config, poll, client, agent, {
-      handleFeedback: (batch, ctx) =>
-        handleFeedback(batch, ctx, feedbackDependencies),
+
+    const batches = await poll();
+    assert.equal(batches.length, 1);
+    const outcome = await handleFeedback(batches[0], {
+      config,
+      agent,
+      git: gitPort,
+      github: client,
+      state: stateFor,
     });
 
-    await daemon.tick();
-    await waitFor(() => postedBodies.length === 1 && cleanupCompleted);
-
-    assert.match(postedBodies[0], /Applied changes.*2 comments.*1 commit/);
+    assert.equal(outcome.kind, "pushed");
+    assert.equal(postedBodies.length, 1);
+    assert.equal(cleanupCompleted, true);
+    assert.match(
+      postedBodies[0],
+      /done\n\n1 commit\(s\) pushed\. Addressed 2, skipped 0, needs a human 0\./,
+    );
     assert.equal(git(["show", "main:agent-output.txt"], remote), "implemented");
     const state = JSON.parse(
       readFileSync(
@@ -117,6 +142,13 @@ function createConfig(root: string): Config {
     claudeCodeBin: "claude",
     codexBin: "codex",
     keepWorkdirs: false,
+    host: "127.0.0.1",
+    port: 3773,
+    webhookSecret: null,
+    publicUrl: null,
+    tailscaleFunnel: false,
+    maxConcurrentRuns: 3,
+    autoReview: false,
   };
 }
 
@@ -208,13 +240,4 @@ function createBareRemote(root: string): string {
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!predicate()) {
-    if (Date.now() >= deadline)
-      throw new Error("Timed out waiting for end-to-end workflow");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
 }

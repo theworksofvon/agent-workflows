@@ -178,7 +178,7 @@ identifiers in that project's `.orchestrator/config.toml`.
 | `REPOS`                                  | required for daemon | Comma-separated `owner/repo` list.                                              |
 | `AGENT`                                  | `codex`             | `codex`, `claude-code`, or `zcode`.                                             |
 | `AGENT_SELF_USER`                        | unset               | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
-| `POLL_INTERVAL_SEC`                      | `60`                | Poll interval; minimum 5 seconds.                                               |
+| `POLL_INTERVAL_SEC`                      | `300`               | Poll interval; minimum 5 seconds.                                               |
 | `COMMENT_BATCH_WINDOW_SEC`               | `10`                | Quiet debounce after the latest related comment.                                |
 | `COMMENT_BATCH_MIN_COMMENTS`             | `2`                 | Related-comment count that makes a batch eligible.                              |
 | `COMMENT_BATCH_MAX_WAIT_SEC`             | `300`               | Maximum age before a smaller batch becomes eligible; `0` disables it.           |

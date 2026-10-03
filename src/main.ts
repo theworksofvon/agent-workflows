@@ -5,6 +5,7 @@ import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./adapters/github/octokit.js";
 import { pollRepos } from "./services/poll.js";
 import { jsonFileState } from "./adapters/state/json-file.js";
+import { gitExec } from "./adapters/git/exec.js";
 import type { CommentBatch } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
@@ -46,7 +47,16 @@ export const defaultCliDependencies: CliDependencies = {
     return () => pollRepos({ config, client, state });
   },
   createDaemon: ({ config, poll, client, agent }) =>
-    new Daemon(config, poll, client, agent),
+    new Daemon(
+      {
+        config,
+        agent,
+        git: gitExec,
+        github: client,
+        state: jsonFileState(config),
+      },
+      poll,
+    ),
   createReviewWorkflow: () => new PullRequestReviewWorkflow(),
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),

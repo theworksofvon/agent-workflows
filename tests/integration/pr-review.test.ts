@@ -66,6 +66,13 @@ function makeConfig(root: string): Config {
     claudeCodeBin: "claude",
     codexBin: "codex",
     keepWorkdirs: false,
+    host: "127.0.0.1",
+    port: 3773,
+    webhookSecret: null,
+    publicUrl: null,
+    tailscaleFunnel: false,
+    maxConcurrentRuns: 3,
+    autoReview: false,
   };
 }
 
