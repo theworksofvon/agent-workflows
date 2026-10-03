@@ -8,7 +8,7 @@ import { jsonFileState } from "./adapters/state/json-file.js";
 import { gitExec } from "./adapters/git/exec.js";
 import type { StateFactory } from "./adapters/state/state.interface.js";
 import type { GitPort } from "./adapters/git/git.interface.js";
-import type { CommentBatch } from "./domain/events.js";
+import type { CommentBatch, RawDelivery } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
 import { Daemon } from "./services/daemon.js";
@@ -19,6 +19,8 @@ import {
 import { log } from "./log.js";
 import { parseReviewTarget } from "./domain/target.js";
 import { reviewPullRequest } from "./services/review-pr.js";
+import { receiveDelivery } from "./services/webhook.js";
+import { startWebhookListener } from "./adapters/http/listener.js";
 import type { ReviewRunResult } from "./services/review-pr.js";
 
 export interface CliDependencies {
@@ -66,9 +68,20 @@ export const defaultCliDependencies: CliDependencies = {
       github: client,
       state,
     };
+    // Tailscale Funnel or a configured public URL is what makes the listener reachable.
+    const webhooksEnabled = config.publicUrl !== null || config.tailscaleFunnel;
+    const webhooks = webhooksEnabled
+      ? {
+          listener: { host: config.host, port: config.port },
+          receiveDelivery: (delivery: RawDelivery) =>
+            receiveDelivery(delivery, { config, github: client, state }),
+          startListener: startWebhookListener,
+        }
+      : {};
     return new Daemon({
       config,
       poll,
+      ...webhooks,
       handleBatch: (batch) => handleFeedback(batch, ports),
       reviewPullRequest: (target) =>
         reviewPullRequest({
@@ -138,8 +151,7 @@ export async function runCli(
 
   const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });
-    daemon.stop();
-    dependencies.exit(0);
+    void daemon.stop().finally(() => dependencies.exit(0));
   };
   dependencies.onSignal("SIGINT", () => stop("SIGINT"));
   dependencies.onSignal("SIGTERM", () => stop("SIGTERM"));

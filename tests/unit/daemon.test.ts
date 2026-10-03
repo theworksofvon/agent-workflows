@@ -335,3 +335,196 @@ test("same PR number in different repos uses different lanes", async () => {
   release();
   await daemon.idle();
 });
+
+type Listener = NonNullable<DaemonPorts["startListener"]>;
+
+function fakeListener(): {
+  startListener: Listener;
+  starts: Array<{ host: string; port: number }>;
+  closes: number[];
+  deliver: Parameters<Listener>[0]["onDelivery"];
+} {
+  const starts: Array<{ host: string; port: number }> = [];
+  const closes: number[] = [];
+  const state = {} as { onDelivery: Parameters<Listener>[0]["onDelivery"] };
+  return {
+    starts,
+    closes,
+    deliver: (d) => state.onDelivery(d),
+    startListener: async ({ host, port, onDelivery }) => {
+      starts.push({ host, port });
+      state.onDelivery = onDelivery;
+      return {
+        url: `http://${host}:${port}`,
+        close: async () => {
+          closes.push(starts.length);
+        },
+      };
+    },
+  };
+}
+
+async function captureInfo(run: () => Promise<void>): Promise<string[]> {
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (line: string) => {
+    lines.push(line);
+  };
+  try {
+    await run();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
+
+test("start opens the webhook listener, logs its URL, and stop closes it", async () => {
+  const listener = fakeListener();
+  const daemon = new Daemon(
+    ports({
+      listener: { host: "127.0.0.1", port: 4000 },
+      receiveDelivery: async () => ({
+        status: 202,
+        reason: "accepted",
+        events: [],
+        ready: [],
+      }),
+      startListener: listener.startListener,
+    }),
+  );
+  const lines = await captureInfo(() => daemon.start());
+  assert.deepEqual(listener.starts, [{ host: "127.0.0.1", port: 4000 }]);
+  assert.ok(
+    lines.some(
+      (line) =>
+        line.includes("webhook listener started") &&
+        line.includes("http://127.0.0.1:4000"),
+    ),
+  );
+  await daemon.stop();
+  assert.deepEqual(listener.closes, [1]);
+  await daemon.stop();
+  assert.deepEqual(listener.closes, [1]);
+});
+
+test("a delivery's events and ready batches are dispatched and its result returned", async () => {
+  const listener = fakeListener();
+  const handled: string[] = [];
+  const reviewed: number[] = [];
+  const daemon = new Daemon(
+    ports({
+      config: { ...makeConfig(), autoReview: true },
+      handleBatch: async (b) => {
+        handled.push(b.batchId);
+      },
+      reviewPullRequest: async (t) => {
+        reviewed.push(t.prNumber);
+      },
+      listener: { host: "127.0.0.1", port: 0 },
+      receiveDelivery: async (d) => ({
+        status: 202,
+        reason: `accepted ${d.id}`,
+        events: [{ kind: "pull_request_ready", pr }],
+        ready: [batch],
+      }),
+      startListener: listener.startListener,
+    }),
+  );
+  await daemon.start();
+  const result = await listener.deliver({
+    id: "d1",
+    event: "pull_request",
+    signature256: null,
+    body: "{}",
+  });
+  assert.equal(result.status, 202);
+  assert.equal(result.reason, "accepted d1");
+  await daemon.idle();
+  assert.deepEqual(handled, [batch.batchId]);
+  assert.deepEqual(reviewed, [pr.number]);
+  await daemon.stop();
+});
+
+test("start without all listener ports opens no listener", async () => {
+  const listener = fakeListener();
+  for (const partial of [
+    { startListener: listener.startListener },
+    {
+      startListener: listener.startListener,
+      listener: { host: "h", port: 1 },
+    },
+    {
+      listener: { host: "h", port: 1 },
+      receiveDelivery: async () => ({
+        status: 202,
+        reason: "accepted",
+        events: [],
+        ready: [],
+      }),
+    },
+  ]) {
+    const daemon = new Daemon(ports(partial));
+    await daemon.start();
+    await daemon.stop();
+  }
+  assert.deepEqual(listener.starts, []);
+});
+
+test("a stop during listener startup closes the listener once it opens", async () => {
+  const listener = fakeListener();
+  let release!: () => void;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  let polls = 0;
+  const daemon = new Daemon(
+    ports({
+      poll: async () => {
+        polls += 1;
+        return [];
+      },
+      listener: { host: "h", port: 1 },
+      receiveDelivery: async () => ({
+        status: 202,
+        reason: "accepted",
+        events: [],
+        ready: [],
+      }),
+      startListener: async (args) => {
+        await gate;
+        return listener.startListener(args);
+      },
+    }),
+  );
+  const starting = daemon.start();
+  await daemon.stop();
+  release();
+  await starting;
+  assert.deepEqual(listener.closes, [1]);
+  assert.equal(polls, 0);
+});
+
+test("a listener that fails to start fails start and leaves the daemon stopped", async () => {
+  let polls = 0;
+  const daemon = new Daemon(
+    ports({
+      poll: async () => {
+        polls += 1;
+        return [];
+      },
+      listener: { host: "h", port: 1 },
+      receiveDelivery: async () => ({
+        status: 202,
+        reason: "accepted",
+        events: [],
+        ready: [],
+      }),
+      startListener: async () => {
+        throw new Error("EADDRINUSE");
+      },
+    }),
+  );
+  await assert.rejects(daemon.start(), /EADDRINUSE/);
+  assert.equal(polls, 0);
+  await assert.rejects(daemon.start(), /EADDRINUSE/);
+});

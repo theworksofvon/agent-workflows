@@ -2,11 +2,26 @@ import type { Config } from "../config.js";
 import type {
   CommentBatch,
   DomainEvent,
+  RawDelivery,
   RepoRef,
   ReviewTarget,
 } from "../domain/events.js";
 import { Dispatcher } from "./dispatch.js";
+import type { WebhookResult } from "./webhook.js";
 import { log } from "../log.js";
+
+export interface WebhookListener {
+  url: string;
+  close(): Promise<void>;
+}
+
+export type StartListener = (args: {
+  host: string;
+  port: number;
+  onDelivery: (
+    delivery: RawDelivery,
+  ) => Promise<{ status: number; reason: string }>;
+}) => Promise<WebhookListener>;
 
 export interface DaemonPorts {
   config: Config;
@@ -16,6 +31,10 @@ export interface DaemonPorts {
   dispatcher?: Dispatcher;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
+  /** The listener opens only when all three webhook ports are present. */
+  listener?: { host: string; port: number };
+  receiveDelivery?: (delivery: RawDelivery) => Promise<WebhookResult>;
+  startListener?: StartListener;
 }
 
 function laneFor(repo: RepoRef, prNumber: number): string {
@@ -23,8 +42,9 @@ function laneFor(repo: RepoRef, prNumber: number): string {
 }
 
 /**
- * The daemon: owns the poll loop and hands work to the dispatcher, which
- * keeps each PR serial and caps total concurrency.
+ * The daemon: owns the poll loop and the webhook listener, and hands work
+ * from both to the dispatcher, which keeps each PR serial and caps total
+ * concurrency.
  */
 export class Daemon {
   private readonly dispatcher: Dispatcher;
@@ -34,6 +54,7 @@ export class Daemon {
   private running = false;
   private lifecycleGeneration = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private webhookListener: WebhookListener | undefined;
 
   constructor(private readonly ports: DaemonPorts) {
     this.dispatcher =
@@ -49,18 +70,45 @@ export class Daemon {
     log.info("daemon started", {
       pollIntervalSec: this.ports.config.pollIntervalSec,
     });
+    try {
+      await this.openListener(generation);
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
+    if (!this.isCurrentRun(generation)) return;
     // First poll immediately so you don't wait a full interval on launch.
     await this.tick();
     if (this.isCurrentRun(generation)) this.scheduleNext(generation);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.running = false;
     this.lifecycleGeneration += 1;
     if (this.timer !== undefined) {
       this.clearTimer(this.timer);
       this.timer = undefined;
     }
+    const listener = this.webhookListener;
+    this.webhookListener = undefined;
+    if (listener) await listener.close();
+  }
+
+  private async openListener(generation: number): Promise<void> {
+    const { listener, receiveDelivery, startListener } = this.ports;
+    if (!listener || !receiveDelivery || !startListener) return;
+    const handle = await startListener({
+      ...listener,
+      onDelivery: async (delivery) => {
+        const result = await receiveDelivery(delivery);
+        this.dispatchEvents(result.events, result.ready);
+        return result;
+      },
+    });
+    // A stop that landed while the port was opening must not leak it.
+    if (!this.isCurrentRun(generation)) return handle.close();
+    this.webhookListener = handle;
+    log.info("webhook listener started", { url: handle.url });
   }
 
   private scheduleNext(generation: number): void {

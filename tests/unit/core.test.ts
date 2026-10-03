@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,6 +12,8 @@ import {
 } from "../../src/adapters/github/octokit.js";
 import type { GitPort } from "../../src/adapters/git/git.interface.js";
 import { getAgent } from "../../src/adapters/agent/registry.js";
+import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import type { RepoRef } from "../../src/domain/events.js";
 import { createLogger } from "../../src/log.js";
 import {
   defaultCliDependencies,
@@ -817,7 +820,7 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
       async start() {
         calls.push("started");
       },
-      stop() {
+      async stop() {
         calls.push("stopped");
       },
       dispatchEvents() {},
@@ -856,7 +859,9 @@ test("CLI help, daemon routing, signal lifecycle, and entrypoint fatal handling 
   await runCli([], daemon.dependencies);
   assert.deepEqual(daemon.calls.slice(0, 2), ["config:true", "started"]);
   daemon.signals.get("SIGINT")?.();
+  await new Promise((done) => setImmediate(done));
   daemon.signals.get("SIGTERM")?.();
+  await new Promise((done) => setImmediate(done));
   assert.deepEqual(daemon.calls.slice(-4), [
     "stopped",
     "exit:0",
@@ -1088,6 +1093,98 @@ test("default daemon wires batches to feedback handling and ready PRs to posting
       assert.ok(seen.includes("workdir"), mode);
     }
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("default daemon serves webhooks only when a public route is configured, through the shared state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "daemon-hooks-"));
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (line: string) => {
+    lines.push(line);
+  };
+  try {
+    const cases: Array<[Partial<Config>, boolean]> = [
+      [{}, false],
+      [{ publicUrl: "https://hooks.example" }, true],
+      [{ tailscaleFunnel: true }, true],
+    ];
+    for (const [over, enabled] of cases) {
+      lines.length = 0;
+      const config: Config = {
+        ...makeConfig(root),
+        webhookSecret: "s",
+        port: 0,
+        ...over,
+      };
+      const opened: RepoRef[] = [];
+      const shared = jsonFileState(config);
+      const daemon = defaultCliDependencies.createDaemon({
+        config,
+        poll: async () => [],
+        client: {} as GitHubClient,
+        agent: defaultCliDependencies.getAgent("codex", config),
+        git: {
+          prepareWorkdir() {
+            throw new Error("stop feedback");
+          },
+        } as unknown as GitPort,
+        state: (repo) => {
+          opened.push(repo);
+          return shared(repo);
+        },
+      });
+      await daemon.start();
+      try {
+        const url = /"url":"([^"]+)"/.exec(
+          lines.find((line) => line.includes("webhook listener started")) ?? "",
+        )?.[1];
+        assert.equal(url !== undefined, enabled, JSON.stringify(over));
+        if (!url) continue;
+        const body = JSON.stringify({
+          action: "created",
+          repository: { name: "repo", owner: { login: "owner" } },
+          comment: {
+            id: 5,
+            user: { login: "alice" },
+            body: "fix",
+            created_at: "2026-01-01T00:00:00Z",
+            path: "a.ts",
+            line: 3,
+            original_line: 3,
+            diff_hunk: "@@",
+            pull_request_review_id: 9,
+          },
+          pull_request: {
+            number: 4,
+            title: "T",
+            body: null,
+            draft: false,
+            head: { ref: "f", repo: { full_name: "owner/repo" } },
+            base: { ref: "main", repo: { full_name: "owner/repo" } },
+          },
+        });
+        const res = await fetch(`${url}/webhooks/github`, {
+          method: "POST",
+          headers: {
+            "x-github-delivery": `d-${JSON.stringify(over)}`,
+            "x-github-event": "pull_request_review_comment",
+            "x-hub-signature-256":
+              "sha256=" + createHmac("sha256", "s").update(body).digest("hex"),
+          },
+          body,
+        });
+        assert.equal(res.status, 202);
+        assert.deepEqual(await res.json(), { reason: "accepted" });
+        await daemon.idle();
+        assert.deepEqual(opened[0], { owner: "owner", repo: "repo" });
+      } finally {
+        await daemon.stop();
+      }
+    }
+  } finally {
+    console.log = original;
     rmSync(root, { recursive: true, force: true });
   }
 });
