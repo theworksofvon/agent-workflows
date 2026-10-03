@@ -37,6 +37,8 @@ export interface GitHubRepoState {
   pollingInitialized: boolean;
   cursors: GitHubRepoCursors;
   pendingCommentGroups: Record<string, PendingCommentGroup>;
+  /** Taken by a run that has not completed or paused yet. */
+  inFlightCommentGroups: Record<string, PendingCommentGroup>;
   processedCommentKeys: string[];
   seenDeliveryIds: string[];
   prs: Record<string, GitHubPullRequestState>;
@@ -52,6 +54,7 @@ const defaultState = (): GitHubRepoState => ({
     reviewCommentId: 0,
   },
   pendingCommentGroups: {},
+  inFlightCommentGroups: {},
   processedCommentKeys: [],
   seenDeliveryIds: [],
   prs: {},
@@ -133,6 +136,10 @@ export class GitHubRepoStateStore implements RepoStatePort {
     const existing = this.state.pendingCommentGroups[groupKey];
     const comments = existing?.comments ?? [];
     if (comments.some((c) => c.key === comment.key)) return;
+    // Poll re-reads comments a webhook already delivered; one that is still
+    // running must not start a second batch.
+    const inFlight = this.state.inFlightCommentGroups[groupKey];
+    if (inFlight?.comments.some((c) => c.key === comment.key)) return;
 
     const firstSeenAtMs = existing?.firstSeenAtMs ?? now;
     this.state.pendingCommentGroups[groupKey] = {
@@ -153,11 +160,7 @@ export class GitHubRepoStateStore implements RepoStatePort {
       lastSeenAtMs: now,
       retryAfterMs: existing?.retryAfterMs,
       lastError: existing?.lastError,
-      comments: [...comments, comment].sort((a, b) => {
-        const byTime =
-          Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
-        return byTime === 0 ? a.id - b.id : byTime;
-      }),
+      comments: mergeComments(comments, [comment]),
     };
     this.persist();
   }
@@ -198,6 +201,8 @@ export class GitHubRepoStateStore implements RepoStatePort {
         attempts: group.attempts,
         comments: group.comments,
       });
+      // Kept on disk until completed or paused so a crash mid-run restores it.
+      this.state.inFlightCommentGroups[groupKey] = group;
       delete this.state.pendingCommentGroups[groupKey];
     }
 
@@ -206,6 +211,7 @@ export class GitHubRepoStateStore implements RepoStatePort {
   }
 
   markBatchCompleted(batch: CommentBatch): void {
+    delete this.state.inFlightCommentGroups[batch.groupKey];
     this.markCommentsProcessed(batch.comments.map((comment) => comment.key));
   }
 
@@ -215,10 +221,22 @@ export class GitHubRepoStateStore implements RepoStatePort {
     error: string;
   }): void {
     const { batch, retryAfterMs, error } = args;
+    delete this.state.inFlightCommentGroups[batch.groupKey];
+    // Comments that arrived while the batch ran sit in a new pending group
+    // under the same key; the paused batch must join them, not replace them.
+    const newer = this.state.pendingCommentGroups[batch.groupKey];
+    const merged = mergeComments(batch.comments, newer?.comments ?? []);
+    const firstSeenAtMs = Number(new Date(batch.firstSeenAt));
+    const lastSeenAtMs = Math.max(
+      Number(new Date(batch.lastSeenAt)),
+      newer?.lastSeenAtMs ?? 0,
+    );
     this.state.pendingCommentGroups[batch.groupKey] = {
       ...batch,
-      firstSeenAtMs: Number(new Date(batch.firstSeenAt)),
-      lastSeenAtMs: Number(new Date(batch.lastSeenAt)),
+      lastSeenAt: new Date(lastSeenAtMs).toISOString(),
+      comments: merged,
+      firstSeenAtMs,
+      lastSeenAtMs,
       retryAfterMs,
       lastError: error,
     };
@@ -311,6 +329,7 @@ export class GitHubRepoStateStore implements RepoStatePort {
     }
     try {
       this.state = normalizeState(JSON.parse(readFileSync(this.file, "utf8")));
+      this.restoreInFlight();
     } catch (err) {
       log.warn("failed to parse github repo state file, resetting", {
         file: this.file,
@@ -320,9 +339,42 @@ export class GitHubRepoStateStore implements RepoStatePort {
     }
   }
 
+  /** The previous process died or was stopped mid-run; queue those again. */
+  private restoreInFlight(): void {
+    const groups = Object.entries(this.state.inFlightCommentGroups);
+    if (groups.length === 0) return;
+    for (const [groupKey, group] of groups) {
+      const newer = this.state.pendingCommentGroups[groupKey];
+      this.state.pendingCommentGroups[groupKey] = newer
+        ? {
+            ...group,
+            comments: mergeComments(group.comments, newer.comments),
+            lastSeenAt: newer.lastSeenAt,
+            lastSeenAtMs: newer.lastSeenAtMs,
+          }
+        : group;
+    }
+    this.state.inFlightCommentGroups = {};
+    log.warn("restored in-flight comment batches from a previous run", {
+      file: this.file,
+      count: groups.length,
+    });
+    this.persist();
+  }
+
   private persist(): void {
     writeFileSync(this.file, JSON.stringify(this.state, null, 2));
   }
+}
+
+function mergeComments(left: Comment[], right: Comment[]): Comment[] {
+  const byKey = new Map<string, Comment>();
+  for (const c of [...left, ...right]) byKey.set(c.key, c);
+  return [...byKey.values()].sort((a, b) => {
+    const byTime =
+      Number(new Date(a.createdAt)) - Number(new Date(b.createdAt));
+    return byTime === 0 ? a.id - b.id : byTime;
+  });
 }
 
 function takeLatest<T>(items: T[], limit: number): T[] {
@@ -369,6 +421,7 @@ function normalizeState(raw: unknown): GitHubRepoState {
       reviewCommentId: state.cursors?.reviewCommentId ?? 0,
     },
     pendingCommentGroups: state.pendingCommentGroups ?? {},
+    inFlightCommentGroups: state.inFlightCommentGroups ?? {},
     processedCommentKeys: state.processedCommentKeys ?? [],
     seenDeliveryIds: state.seenDeliveryIds ?? [],
     prs,

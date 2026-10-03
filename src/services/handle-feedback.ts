@@ -46,6 +46,7 @@ export type FeedbackOutcome =
   | { kind: "no-report" }
   | { kind: "lease-rejected"; report: AgentReport }
   | { kind: "push-failed"; report: AgentReport }
+  | { kind: "failed"; error: string }
   | { kind: "retry-scheduled"; retryAfterMs: number };
 
 export interface FeedbackPacket {
@@ -225,6 +226,26 @@ export async function handleFeedback(
     return ahead > 0
       ? { kind: "pushed", commits: ahead, report }
       : { kind: "no-changes", report };
+  } catch (err) {
+    // The batch was taken from pending before this run started; a thrown
+    // error must put it back or give it a recorded end, never drop it.
+    const error = err instanceof Error ? err.message : String(err);
+    if (canRetry) return pauseForRetry(error);
+    log.error("batch failed at max attempts", { slug, error });
+    repoState.recordPrHistory(prNumber, {
+      batchId: batch.batchId,
+      handledAt: new Date(now()).toISOString(),
+      agent: agent.name,
+      exitCode: null,
+      commitCount: 0,
+      commentKeys: batch.comments.map((c) => c.key),
+      summary: `run failed: ${error}`,
+    });
+    repoState.markBatchCompleted(batch);
+    await post(
+      `${MARKER_TAG} Run failed after ${batch.attempts} attempts for ${describeBatch(batch)}; batch not applied. ${error}`,
+    );
+    return { kind: "failed", error };
   } finally {
     if (workdir) git.cleanupWorkdir(workdir, config.keepWorkdirs);
     if (!config.keepWorkdirs)

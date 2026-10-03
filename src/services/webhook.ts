@@ -76,7 +76,6 @@ export async function receiveDelivery(
       : normalized.events[0].pr.repo;
   const state = ports.state(repo);
   if (state.hasSeenDelivery(delivery.id)) return reply(202, "duplicate");
-  state.markDeliverySeen(delivery.id);
 
   let events = normalized.kind === "events" ? normalized.events : [];
   if (normalized.kind === "needs_pull_request") {
@@ -85,6 +84,9 @@ export async function receiveDelivery(
     if (pr.fromFork) return reply(202, "fork");
     events = normalized.build(pr);
   }
+  // Marked only once the PR lookup succeeded, so GitHub's redelivery of a
+  // failed attempt is processed instead of answered "duplicate".
+  state.markDeliverySeen(delivery.id);
 
   const now = (ports.now ?? Date.now)();
   const policy: IngestPolicy = {

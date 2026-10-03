@@ -37,6 +37,13 @@ export interface DaemonPorts {
   startListener?: StartListener;
 }
 
+/**
+ * How long stop() waits for running agent lanes. launchd kills after 20s and
+ * systemd after 90s by default; anything still running is restored from the
+ * state file's in-flight record on the next start.
+ */
+export const SHUTDOWN_GRACE_MS = 15_000;
+
 function laneFor(repo: RepoRef, prNumber: number): string {
   return `${repo.owner}/${repo.repo}#${prNumber}`;
 }
@@ -92,6 +99,29 @@ export class Daemon {
     const listener = this.webhookListener;
     this.webhookListener = undefined;
     if (listener) await listener.close();
+    await this.drain();
+  }
+
+  private async drain(): Promise<void> {
+    if (this.dispatcher.running === 0 && this.dispatcher.queued === 0) return;
+    log.info("waiting for running batches", {
+      running: this.dispatcher.running,
+      queued: this.dispatcher.queued,
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = this.setTimer(() => resolve(true), SHUTDOWN_GRACE_MS);
+    });
+    const finished = await Promise.race([
+      this.dispatcher.idle().then(() => false),
+      timedOut,
+    ]);
+    if (timer !== undefined) this.clearTimer(timer);
+    if (finished)
+      log.warn("shutdown grace elapsed; unfinished batches resume on restart", {
+        running: this.dispatcher.running,
+        queued: this.dispatcher.queued,
+      });
   }
 
   private async openListener(generation: number): Promise<void> {

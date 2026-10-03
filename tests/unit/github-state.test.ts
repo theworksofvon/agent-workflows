@@ -144,6 +144,129 @@ test("retryable failures pause and later re-emit the batch", () => {
   }
 });
 
+const samplePr = {
+  repo: { owner: "local-owner", repo: "sample-repo" },
+  number: 1,
+  title: "Test PR",
+  body: null,
+  headRef: "feature/test",
+  baseRef: "main",
+  draft: false,
+  fromFork: false,
+};
+const sampleComment = (id: number, at: number) => ({
+  key: `local-owner/sample-repo#1:review:${id}`,
+  id,
+  kind: "review" as const,
+  author: "reviewer",
+  body: `fix ${id}`,
+  createdAt: new Date(at).toISOString(),
+});
+
+test("a batch taken by a run that never finished is queued again on reload", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-inflight-"));
+  try {
+    const state = makeState(root);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 1_000,
+      comment: sampleComment(100, 1_000),
+    });
+    const [taken] = state.takeReadyCommentBatches(2_000, immediatePolicy);
+    assert.equal(taken.attempts, 1);
+    // A comment arriving mid-run opens a fresh pending group under the key.
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 3_000,
+      comment: sampleComment(101, 3_000),
+    });
+    // The process dies here without completing or pausing the batch.
+
+    const reloaded = makeState(root);
+    const [restored] = reloaded.takeReadyCommentBatches(4_000, immediatePolicy);
+    assert.equal(restored.batchId, taken.batchId);
+    assert.equal(restored.attempts, 2);
+    assert.deepEqual(
+      restored.comments.map((c) => c.id),
+      [100, 101],
+    );
+    assert.equal(
+      reloaded.takeReadyCommentBatches(5_000, immediatePolicy).length,
+      0,
+    );
+
+    reloaded.markBatchCompleted(restored);
+    const third = makeState(root);
+    assert.deepEqual(third.takeReadyCommentBatches(6_000, immediatePolicy), []);
+    assert.equal(
+      third.hasProcessedComment("local-owner/sample-repo#1:review:101"),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a restored batch without newer comments is queued as it was taken", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-inflight-"));
+  try {
+    const state = makeState(root);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 1_000,
+      comment: sampleComment(100, 1_000),
+    });
+    state.takeReadyCommentBatches(2_000, immediatePolicy);
+    const [restored] = makeState(root).takeReadyCommentBatches(
+      3_000,
+      immediatePolicy,
+    );
+    assert.deepEqual(
+      restored.comments.map((c) => c.id),
+      [100],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pausing a batch merges comments that arrived while it ran", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-merge-"));
+  try {
+    const state = makeState(root);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 1_000,
+      comment: sampleComment(100, 1_000),
+    });
+    const [taken] = state.takeReadyCommentBatches(2_000, immediatePolicy);
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 3_000,
+      comment: sampleComment(101, 3_000),
+    });
+    state.pauseBatchForRetry({
+      batch: taken,
+      retryAfterMs: 4_000,
+      error: "rate limited",
+    });
+    const [retried] = state.takeReadyCommentBatches(4_000, immediatePolicy);
+    assert.deepEqual(
+      retried.comments.map((c) => c.id),
+      [100, 101],
+    );
+    assert.equal(retried.lastSeenAt, new Date(3_000).toISOString());
+    assert.equal(retried.attempts, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("comment batches wait for a count threshold or maximum age", () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-threshold-"));
   try {

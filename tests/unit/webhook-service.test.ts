@@ -226,7 +226,8 @@ test("a review comment delivery is ingested and its batch is ready", async () =>
     assert.equal(result.ready.length, 1);
     assert.equal(result.ready[0].comments[0].key, "o/r#4:review:5");
     const store = h.stores.get("o/r");
-    assert.equal(store?.getReviewCommentCursor(4), 5);
+    // Only the poller moves cursors, so a lost delivery is still reconciled.
+    assert.equal(store?.getReviewCommentCursor(4), 0);
     assert.equal(store?.hasSeenDelivery("d1"), true);
   } finally {
     h.cleanup();
@@ -245,6 +246,29 @@ test("a redelivered id is reported as a duplicate and not re-ingested", async ()
       events: [],
       ready: [],
     });
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("a delivery whose PR lookup fails is not marked seen, so redelivery works", async () => {
+  const h = harness();
+  const fetchPr = h.ports.github.getPullRequest;
+  let fail = true;
+  h.ports.github = {
+    async getPullRequest(repo, prNumber) {
+      if (fail) throw new Error("github 502");
+      return fetchPr(repo, prNumber);
+    },
+  };
+  try {
+    const d = delivery("issue_comment", issueCommentPayload);
+    await assert.rejects(receiveDelivery(d, h.ports), /github 502/);
+    assert.equal(h.stores.get("o/r")?.hasSeenDelivery("d1"), false);
+    fail = false;
+    const retried = await receiveDelivery(d, h.ports);
+    assert.equal(retried.reason, "accepted");
+    assert.equal(retried.ready.length, 1);
   } finally {
     h.cleanup();
   }

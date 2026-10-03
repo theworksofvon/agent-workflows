@@ -55,13 +55,8 @@ export async function pollRepos(args: {
       // --- conversation comments ---
       const lastIssue = state.getIssueCommentCursor(pr.number);
       const issueComments = await client.listIssueComments(repo, pr.number);
-      if (skipExisting) {
-        // A fresh state file must not replay history: just move the cursor.
-        state.setIssueCommentCursor(
-          pr.number,
-          issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue),
-        );
-      } else {
+      // A fresh state file must not replay history: just move the cursor.
+      if (!skipExisting) {
         for (const c of issueComments) {
           if (c.id <= lastIssue) continue;
           ingestComment({
@@ -80,16 +75,15 @@ export async function pollRepos(args: {
           });
         }
       }
+      state.setIssueCommentCursor(
+        pr.number,
+        issueComments.reduce((m, c) => Math.max(m, c.id), lastIssue),
+      );
 
       // --- inline review comments ---
       const lastReview = state.getReviewCommentCursor(pr.number);
       const reviewComments = await client.listReviewComments(repo, pr.number);
-      if (skipExisting) {
-        state.setReviewCommentCursor(
-          pr.number,
-          reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview),
-        );
-      } else {
+      if (!skipExisting) {
         for (const c of reviewComments) {
           if (c.id <= lastReview) continue;
           ingestComment({
@@ -114,6 +108,10 @@ export async function pollRepos(args: {
           });
         }
       }
+      state.setReviewCommentCursor(
+        pr.number,
+        reviewComments.reduce((m, c) => Math.max(m, c.id), lastReview),
+      );
     }
 
     state.markPollingInitialized();

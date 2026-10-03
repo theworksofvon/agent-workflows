@@ -6,7 +6,11 @@ import type {
   CommentBatch,
   PullRequest,
 } from "../../src/domain/events.js";
-import { Daemon, type DaemonPorts } from "../../src/services/daemon.js";
+import {
+  Daemon,
+  SHUTDOWN_GRACE_MS,
+  type DaemonPorts,
+} from "../../src/services/daemon.js";
 import { Dispatcher } from "../../src/services/dispatch.js";
 
 function makeConfig(): Config {
@@ -377,6 +381,75 @@ async function captureInfo(run: () => Promise<void>): Promise<string[]> {
   }
   return lines;
 }
+
+test("stop waits for a running batch to finish, then disarms the grace timer", async () => {
+  let release: () => void = () => {};
+  const finished: string[] = [];
+  const armed: object[] = [];
+  const cleared: object[] = [];
+  const daemon = new Daemon(
+    ports({
+      poll: async () => [batch],
+      handleBatch: async (b) => {
+        await new Promise<void>((resolve) => (release = resolve));
+        finished.push(b.batchId);
+      },
+      setTimeout: ((_callback: () => void, delay: number) => {
+        const handle = { delay };
+        armed.push(handle);
+        return handle as unknown as ReturnType<typeof setTimeout>;
+      }) as unknown as typeof setTimeout,
+      clearTimeout: ((handle: object) => {
+        cleared.push(handle);
+      }) as unknown as typeof clearTimeout,
+    }),
+  );
+  await daemon.start();
+  let stopped = false;
+  const stopping = daemon.stop().then(() => {
+    stopped = true;
+  });
+  await new Promise((done) => setImmediate(done));
+  assert.equal(stopped, false);
+  release();
+  await stopping;
+  assert.deepEqual(finished, [batch.batchId]);
+  // Both the poll timer and the grace timer were cleared.
+  assert.deepEqual(cleared, armed);
+  assert.equal(armed.length, 2);
+});
+
+test("stop gives up after the shutdown grace and leaves the batch to restart", async () => {
+  const timers: Array<{ callback: () => void; delay: number }> = [];
+  const daemon = new Daemon(
+    ports({
+      poll: async () => [batch],
+      handleBatch: () => new Promise(() => {}),
+      setTimeout: ((callback: () => void, delay: number) => {
+        timers.push({ callback, delay });
+        return {} as ReturnType<typeof setTimeout>;
+      }) as unknown as typeof setTimeout,
+      clearTimeout: (() => {}) as typeof clearTimeout,
+    }),
+  );
+  await daemon.start();
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (line: string) => {
+    lines.push(line);
+  };
+  try {
+    const stopping = daemon.stop();
+    await new Promise((done) => setImmediate(done));
+    const grace = timers.find((t) => t.delay === SHUTDOWN_GRACE_MS);
+    assert.ok(grace, "a grace timer is armed while a batch is running");
+    grace.callback();
+    await stopping;
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(lines.some((l) => l.includes("shutdown grace elapsed")));
+});
 
 test("start opens the webhook listener, logs its URL, and stop closes it", async () => {
   const listener = fakeListener();

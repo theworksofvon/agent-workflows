@@ -11,6 +11,11 @@ export interface IntakeResult {
   reason?: string;
 }
 
+/**
+ * Filters one comment and adds it to its pending group. Cursors are not
+ * touched here: only the poller moves them, so a webhook delivery that fails
+ * halfway leaves the comment for the next reconciliation poll to pick up.
+ */
 export function ingestComment(args: {
   state: RepoStatePort;
   pr: PullRequest;
@@ -19,7 +24,6 @@ export function ingestComment(args: {
   policy: IngestPolicy;
 }): IntakeResult {
   const { state, pr, comment, now, policy } = args;
-  advanceCursor(state, pr.number, comment);
   const dropped = dropReason(comment, policy);
   if (dropped) return { accepted: false, reason: dropped };
   if (state.hasProcessedComment(comment.key))
@@ -31,22 +35,4 @@ export function ingestComment(args: {
     now,
   });
   return { accepted: true };
-}
-
-function advanceCursor(
-  state: RepoStatePort,
-  prNumber: number,
-  comment: Comment,
-): void {
-  if (comment.kind === "issue") {
-    state.setIssueCommentCursor(
-      prNumber,
-      Math.max(state.getIssueCommentCursor(prNumber), comment.id),
-    );
-  } else if (comment.kind === "review") {
-    state.setReviewCommentCursor(
-      prNumber,
-      Math.max(state.getReviewCommentCursor(prNumber), comment.id),
-    );
-  }
 }

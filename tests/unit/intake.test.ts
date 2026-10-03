@@ -28,7 +28,7 @@ const comment = (over: Partial<Comment> = {}): Comment => ({
 });
 const policy = { allowedAuthors: null, agentSelfUser: null };
 
-test("accepted comment joins a pending group and advances the cursor", () => {
+test("accepted comment joins a pending group and leaves cursors to the poller", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
     const state = new GitHubRepoStateStore(root, pr.repo, {
@@ -43,7 +43,7 @@ test("accepted comment joins a pending group and advances the cursor", () => {
       policy,
     });
     assert.deepEqual(result, { accepted: true });
-    assert.equal(state.getIssueCommentCursor(4), 10);
+    assert.equal(state.getIssueCommentCursor(4), 0);
     const batches = state.takeReadyCommentBatches(1_000, {
       quietWindowMs: 0,
       minComments: 1,
@@ -56,7 +56,7 @@ test("accepted comment joins a pending group and advances the cursor", () => {
   }
 });
 
-test("review comments advance the review cursor; summaries touch none", () => {
+test("review comments and summaries are ingested without moving any cursor", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
     const state = new GitHubRepoStateStore(root, pr.repo, {
@@ -87,8 +87,14 @@ test("review comments advance the review cursor; summaries touch none", () => {
         kind: "review_summary",
       }),
     });
-    assert.equal(state.getReviewCommentCursor(4), 22);
+    assert.equal(state.getReviewCommentCursor(4), 0);
     assert.equal(state.getIssueCommentCursor(4), 0);
+    const [batch] = state.takeReadyCommentBatches(1, {
+      quietWindowMs: 0,
+      minComments: 1,
+      maxWaitMs: 0,
+    });
+    assert.equal(batch.comments[0].key, "o/r#4:review:22");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -111,7 +117,6 @@ test("dropped and processed comments are reported with a reason", () => {
       }),
       { accepted: false, reason: "author-not-allowed" },
     );
-    assert.equal(state.getIssueCommentCursor(4), 10);
     ingestComment({ state, pr, now: 1, policy, comment: comment() });
     const [batch] = state.takeReadyCommentBatches(1, {
       quietWindowMs: 0,
@@ -128,7 +133,7 @@ test("dropped and processed comments are reported with a reason", () => {
   }
 });
 
-test("bot-authored review comments are dropped and still advance the review cursor", () => {
+test("bot-authored review comments are dropped", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
     const state = new GitHubRepoStateStore(root, pr.repo, {
@@ -150,28 +155,37 @@ test("bot-authored review comments are dropped and still advance the review curs
       }),
     });
     assert.deepEqual(result, { accepted: false, reason: "bot" });
-    assert.equal(state.getReviewCommentCursor(4), 31);
+    assert.deepEqual(
+      state.takeReadyCommentBatches(1, {
+        quietWindowMs: 0,
+        minComments: 1,
+        maxWaitMs: 0,
+      }),
+      [],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("an older comment id never moves the cursor backwards", () => {
+test("a comment already running in a batch is not queued a second time", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
     const state = new GitHubRepoStateStore(root, pr.repo, {
       processedCommentKeyLimit: 10,
       commentBatchHistoryLimit: 5,
     });
+    const policyNow = { quietWindowMs: 0, minComments: 1, maxWaitMs: 0 };
     ingestComment({ state, pr, now: 1, policy, comment: comment() });
-    ingestComment({
-      state,
-      pr,
-      now: 1,
-      policy,
-      comment: comment({ key: "o/r#4:issue:5", id: 5 }),
-    });
-    assert.equal(state.getIssueCommentCursor(4), 10);
+    const [running] = state.takeReadyCommentBatches(1, policyNow);
+    assert.equal(running.comments.length, 1);
+
+    // The poller re-reads the same comment while the webhook-started run is live.
+    assert.deepEqual(
+      ingestComment({ state, pr, now: 2, policy, comment: comment() }),
+      { accepted: true },
+    );
+    assert.deepEqual(state.takeReadyCommentBatches(2, policyNow), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

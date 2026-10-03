@@ -718,7 +718,7 @@ test("GitHub failures after a push are logged; state already records the push", 
   }
 });
 
-test("a prepareWorkdir failure propagates and still removes the run directory", async () => {
+test("a thrown error pauses the batch for retry and still removes the run directory", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
   const calls = newCalls();
   try {
@@ -726,18 +726,46 @@ test("a prepareWorkdir failure propagates and still removes the run directory", 
     git.prepareWorkdir = () => {
       throw new Error("clone failed");
     };
-    await assert.rejects(
-      handleFeedback(
-        batch(),
-        ports(root, reportWritingAgent(fullReport), git, calls),
-      ),
-      /clone failed/,
-    );
+    const p = ports(root, reportWritingAgent(fullReport), git, calls);
+    const outcome = await handleFeedback(batch(), p);
+    assert.equal(outcome.kind, "retry-scheduled");
     assert.equal(calls.cleanups, 0);
+    assert.deepEqual(calls.comments, []);
     assert.equal(
       existsSync(join(root, "state", "runs", "batch_o_r_pr_4_conversation_1")),
       false,
     );
+    const state = p.state(batch().repo);
+    assert.equal(state.hasProcessedComment("o/r#4:issue:1"), false);
+    const [again] = state.takeReadyCommentBatches(Date.now() + 10_000, {
+      quietWindowMs: 0,
+      minComments: 1,
+      maxWaitMs: 0,
+    });
+    assert.equal(again.comments.length, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a thrown error at max attempts posts a failure summary and marks the batch processed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const git = fakeGit(root, {}, calls);
+    git.prepareWorkdir = () => {
+      throw new Error("clone failed");
+    };
+    const p = ports(root, reportWritingAgent(fullReport), git, calls);
+    const outcome = await handleFeedback({ ...batch(), attempts: 3 }, p);
+    assert.deepEqual(outcome, { kind: "failed", error: "clone failed" });
+    assert.equal(calls.pushes, 0);
+    assert.equal(calls.comments.length, 1);
+    assert.match(calls.comments[0], /Run failed after 3 attempts/);
+    assert.match(calls.comments[0], /clone failed/);
+    const state = p.state(batch().repo);
+    assert.equal(state.hasProcessedComment("o/r#4:issue:1"), true);
+    assert.equal(state.getRecentPrHistory(4, 5)[0].exitCode, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

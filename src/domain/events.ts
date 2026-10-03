@@ -47,7 +47,7 @@ export interface BatchHistory {
   batchId: string;
   handledAt: string;
   agent: string;
-  exitCode: number;
+  exitCode: number | null;
   commitCount: number;
   commentKeys: string[];
   summary: string;

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Keep Batches Across Failures and Restarts
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Close the whole-branch review findings where comment batches could be lost or a missed webhook could never be reconciled.
+Message: A taken batch now stays on disk as in-flight until it completes or pauses, so a crash, restart, or thrown error puts it back in the queue instead of dropping it.
+Added/Changed: In-flight batch record restored on load; any thrown error in feedback handling pauses the batch for retry or, at max attempts, posts a failure summary and marks it processed; `stop()` waits up to 15 seconds for running lanes; a paused batch merges comments that arrived during the run; only the poller moves comment cursors; a delivery is marked seen only after its PR lookup succeeds.
+Fixed/Removed: Fork pull requests are now skipped on the poll path as well as the webhook path. Removed the cursor advance from intake.
+Handoff: Existing `state/github/*.json` files were moved to `state/.archive/github-2026-10-03/`; delete that folder once the daemon has run cleanly.
+
 ### Agentic, Event-Driven Restructure
 
 Date: 2026-10-02 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
