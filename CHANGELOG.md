@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Store State in SQLite
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Stop rewriting one whole JSON file per repository on every state change.
+Message: Daemon state now lives in one SQLite database, `state/agent-workflows.sqlite`, through Node's built-in `node:sqlite`; each change commits atomically, so a crash never leaves half an update.
+Added/Changed: Cursors, pending and in-flight batches, processed comment keys, seen webhook deliveries, batch and review history, and posted review findings are rows keyed by repository; the database runs in WAL mode and waits up to 5 seconds for a lock held by another process. `sqliteState(config, { recoverInFlight: true })` restores batches a previous process left in flight; only the daemon sets it, so a `review` run beside a live daemon no longer requeues its running batch. Batching, retry, restore, and retention behaviour is unchanged.
+Fixed/Removed: Removed the per-repository JSON state store and its legacy-file normalization and corrupt-file reset.
+Handoff: Existing `state/github/*.json` files are not migrated; the daemon starts from an empty database and re-establishes cursors on its first poll. To move a daemon, stop it and copy `state/agent-workflows.sqlite` with its `-wal` and `-shm` files.
+
+### Move Developer Commands to mise
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Make mise the single place that defines the toolchain, the shell environment, and every developer command, instead of splitting them across `.nvmrc`, corepack, and `package.json` scripts.
+Message: `mise install` provides Node 24 and pnpm 11, `mise run gate` runs every check CI runs with independent tasks in parallel, and `.env` is loaded into the shell inside the repo.
+Added/Changed: `mise.toml` with tools, `[env]`, and tasks (`deps`, `setup`, `doctor`, `build`, `dev`, `typecheck`, `typecheck:tests`, `lint`, `format`, `format:check`, `check:scripts`, `test`, `test:unit`, `test:integration`, `test:smoke`, `gate`); both workflows install the toolchain with `jdx/mise-action` and call the same tasks; `package.json` scripts reduced to `start`, `review`, and `agent-workflows`; the webhook listener now re-checks a repo's pending batches once the quiet window has passed instead of waiting for the next poll.
+Fixed/Removed: Removed `.nvmrc`, the corepack install steps, and the pnpm and Node setup actions from CI; `test:typecheck` is now `typecheck:tests`.
+Handoff: Run `mise install` once in an existing checkout. The daemon under launchd or systemd still reads `.env` itself because no shell is involved there.
+
+### Keep Batches Across Failures and Restarts
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Close the whole-branch review findings where comment batches could be lost or a missed webhook could never be reconciled.
+Message: A taken batch now stays on disk as in-flight until it completes or pauses, so a crash, restart, or thrown error puts it back in the queue instead of dropping it.
+Added/Changed: In-flight batch record restored on load; any thrown error in feedback handling pauses the batch for retry or, at max attempts, posts a failure summary and marks it processed; `stop()` waits up to 15 seconds for running lanes; a paused batch merges comments that arrived during the run; only the poller moves comment cursors; a delivery is marked seen only after its PR lookup succeeds.
+Fixed/Removed: Fork pull requests are now skipped on the poll path as well as the webhook path. Removed the cursor advance from intake.
+Handoff: Existing `state/github/*.json` files were moved to `state/.archive/github-2026-10-03/`; delete that folder once the daemon has run cleanly.
+
+### Agentic, Event-Driven Restructure
+
+Date: 2026-10-02 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Keep every deterministic step in code and hand every judgment call to the agent, with GitHub webhooks as the primary event source.
+Message: The daemon is now ports and adapters; the agent receives a packet, decides per comment, and must write a report that code turns into pushes, thread replies, and a summary.
+Added/Changed: `domain/`, `services/`, `adapters/` layout; mandatory agent report with per-comment `addressed`, `skipped`, `needs_human`; webhook listener with HMAC verification and delivery dedupe; polling demoted to 300-second reconciliation; per-PR dispatch lanes with `MAX_CONCURRENT_RUNS`; `AUTO_REVIEW`; `ALLOWED_AUTHORS`; `PUBLIC_URL` and `TAILSCALE_FUNNEL` exposure; `webhooks install|status`; `service install|uninstall`.
+Fixed/Removed: Removed bundled `skills/`, the skill installer, doctor skill-link checks, and the Python test job; the `pr-feedback` skill lives in vstack. A missing report no longer lets uncommitted agent work be pushed.
+Handoff: Before restarting against existing state, move `state/github/EK-LABS-LLC/pluto-predicts.json` aside so cursors re-establish, and set `ALLOWED_AUTHORS` or trim `REPOS` for public repositories.
+
 ### Narrow Supported CI Platforms
 
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `agent/drop-windows-ci`.

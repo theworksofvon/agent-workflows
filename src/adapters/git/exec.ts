@@ -1,0 +1,260 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import path, { join, resolve } from "node:path";
+import { PushRejectedError } from "../../domain/errors.js";
+import { log } from "../../log.js";
+import type { GitPort, WorkdirHandle } from "./git.interface.js";
+
+export type { WorkdirHandle };
+
+function git(args: string[], opts: { cwd: string }): string {
+  log.debug("git", { args, cwd: opts.cwd });
+  return execFileSync("git", args, {
+    cwd: opts.cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/**
+ * Create an isolated checkout of a PR branch using git worktrees.
+ *
+ * The first task for a repo creates a cached bare repo at:
+ *   state/repos/<owner>/<repo>.git
+ *
+ * Each task then gets its own worktree at:
+ *   state/worktrees/<owner>/<repo>/<task-id>...
+ *
+ * This keeps agent sessions isolated without repeatedly cloning the full repo.
+ */
+export function prepareWorkdir(args: {
+  stateDir: string;
+  repo: { owner: string; repo: string };
+  branch: string;
+  taskId: string;
+  token: string;
+  cloneUrlOverride?: string;
+}): WorkdirHandle {
+  const { repo, branch, taskId, token, stateDir } = args;
+  const safeOwner = safePathSegment(repo.owner);
+  const safeRepo = safePathSegment(repo.repo);
+  const safeTask = safePathSegment(taskId);
+  const stateRoot = resolve(stateDir);
+  const repoCachePath = join(stateRoot, "repos", safeOwner, `${safeRepo}.git`);
+  const worktreeBase = join(stateRoot, "worktrees", safeOwner, safeRepo);
+  mkdirSync(worktreeBase, { recursive: true });
+  const dir = mkdtempSync(join(worktreeBase, `${safeTask}-`));
+  const cloneUrl = resolveCloneUrl(repo, token, args.cloneUrlOverride);
+  const localBranch = `agent-workflows/${safeTask}-${Date.now()}`;
+
+  try {
+    assertInsideManagedRoot(dir, worktreeBase);
+    ensureRepoCache({ repoCachePath, cloneUrl, branch });
+    const baseSha = git(["rev-parse", `refs/remotes/origin/${branch}`], {
+      cwd: repoCachePath,
+    });
+    log.info("preparing isolated worktree", { dir, repo, branch });
+    git(["worktree", "add", "-B", localBranch, dir, `origin/${branch}`], {
+      cwd: repoCachePath,
+    });
+    // Ensure git identity is set for commits the agent makes.
+    git(["config", "user.name", "agent-workflows"], { cwd: dir });
+    git(["config", "user.email", "agent-workflows@users.noreply.github.com"], {
+      cwd: dir,
+    });
+    return { path: dir, branch, localBranch, baseSha, repoCachePath };
+  } catch (err) {
+    // Clean up a half-made worktree so we don't leave junk.
+    cleanupPath(dir, worktreeBase);
+    throw new Error(
+      `Failed to prepare worktree for ${repo.owner}/${repo.repo}:${branch}: ${String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+/** Remove the worktree unless KEEP_WORKDIRS is set. */
+export function cleanupWorkdir(handle: WorkdirHandle, keep: boolean): void {
+  if (keep) {
+    log.debug("keeping worktree for debugging", { path: handle.path });
+    return;
+  }
+  const worktreeRoot = resolve(
+    handle.repoCachePath,
+    "..",
+    "..",
+    "..",
+    "worktrees",
+  );
+  assertInsideManagedRoot(handle.path, worktreeRoot);
+  try {
+    git(["worktree", "remove", "--force", handle.path], {
+      cwd: handle.repoCachePath,
+    });
+    git(["worktree", "prune"], { cwd: handle.repoCachePath });
+    deleteLocalBranch(handle);
+  } catch (err) {
+    log.warn("git worktree remove failed, removing path directly", {
+      path: handle.path,
+      error: String(err),
+    });
+    cleanupPath(handle.path, worktreeRoot);
+    git(["worktree", "prune"], { cwd: handle.repoCachePath });
+    deleteLocalBranch(handle);
+  }
+}
+
+function deleteLocalBranch(handle: WorkdirHandle): void {
+  try {
+    git(["branch", "-D", handle.localBranch], { cwd: handle.repoCachePath });
+  } catch (err) {
+    log.warn("failed to delete temporary worktree branch", {
+      branch: handle.localBranch,
+      error: String(err),
+    });
+  }
+}
+
+function ensureRepoCache(args: {
+  repoCachePath: string;
+  cloneUrl: string;
+  branch: string;
+}): void {
+  const { repoCachePath, cloneUrl, branch } = args;
+  if (!existsSync(repoCachePath)) {
+    mkdirSync(resolve(repoCachePath, ".."), { recursive: true });
+    log.info("creating cached bare repo", { repoCachePath });
+    git(["clone", "--bare", cloneUrl, repoCachePath], {
+      cwd: resolve(repoCachePath, ".."),
+    });
+  } else {
+    git(["remote", "set-url", "origin", cloneUrl], { cwd: repoCachePath });
+  }
+  git(
+    [
+      "fetch",
+      "--prune",
+      "origin",
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ],
+    {
+      cwd: repoCachePath,
+    },
+  );
+}
+
+function safePathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "task";
+}
+
+export function resolveCloneUrl(
+  repo: { owner: string; repo: string },
+  token: string,
+  override?: string,
+): string {
+  return (
+    override ??
+    `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}`
+  );
+}
+
+export function assertInsideManagedRoot(
+  candidatePath: string,
+  root: string,
+  pathFlavor: Pick<
+    typeof path,
+    "isAbsolute" | "relative" | "resolve" | "sep"
+  > = path,
+): void {
+  const resolvedPath = pathFlavor.resolve(candidatePath);
+  const resolvedRoot = pathFlavor.resolve(root);
+  const rel = pathFlavor.relative(resolvedRoot, resolvedPath);
+  const unsafe = [
+    rel === "",
+    rel === "..",
+    rel.startsWith(`..${pathFlavor.sep}`),
+    pathFlavor.isAbsolute(rel),
+  ].includes(true);
+  if (unsafe) {
+    throw new Error(
+      `Refusing to operate outside managed worktree root: ${resolvedPath}`,
+    );
+  }
+}
+
+function cleanupPath(path: string, root: string): void {
+  if (!existsSync(path)) return;
+  assertInsideManagedRoot(path, root);
+  rmSync(path, { recursive: true, force: true });
+}
+
+/** Count commits on the branch ahead of origin. */
+export function commitsAhead(workdir: string, branch: string): number {
+  try {
+    const out = git(["rev-list", "--count", "HEAD", `^origin/${branch}`], {
+      cwd: workdir,
+    });
+    return Number(out) || 0;
+  } catch {
+    // origin/HEAD may not exist; fall back to status.
+    const status = git(["status", "--porcelain"], { cwd: workdir });
+    return status === "" ? 0 : 1;
+  }
+}
+
+export function hasUncommittedChanges(workdir: string): boolean {
+  return git(["status", "--porcelain"], { cwd: workdir }) !== "";
+}
+
+export function commitUncommittedChanges(
+  workdir: string,
+  message: string,
+): boolean {
+  if (!hasUncommittedChanges(workdir)) return false;
+  log.info("committing uncommitted agent changes", { message });
+  git(["add", "-A"], { cwd: workdir });
+  git(["commit", "-m", message], { cwd: workdir });
+  return true;
+}
+
+/**
+ * Push the branch back to origin. Throws PushRejectedError when the lease or
+ * fast-forward check rejects it; any other failure is rethrown unchanged.
+ * Uses force-with-lease to be safe against
+ * a teammate pushing in between our fetch and push.
+ */
+export function pushBranch(
+  workdir: string,
+  branch: string,
+  expectedRemoteSha: string,
+): void {
+  const remoteRef = `refs/heads/${branch}`;
+  log.info("pushing branch to origin", { branch, expectedRemoteSha });
+  try {
+    git(
+      [
+        "push",
+        `--force-with-lease=${remoteRef}:${expectedRemoteSha}`,
+        "origin",
+        `HEAD:${remoteRef}`,
+      ],
+      { cwd: workdir },
+    );
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr);
+    if (PUSH_REJECTED.test(stderr))
+      throw new PushRejectedError(branch, { cause: err });
+    throw err;
+  }
+}
+
+const PUSH_REJECTED = /stale info|\[rejected\]|fetch first|non-fast-forward/i;
+
+export const gitExec: GitPort = {
+  prepareWorkdir,
+  cleanupWorkdir,
+  hasUncommittedChanges,
+  commitUncommittedChanges,
+  commitsAhead,
+  pushBranch,
+};

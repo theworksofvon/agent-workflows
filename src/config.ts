@@ -1,13 +1,14 @@
 import "dotenv/config";
 import { resolve } from "node:path";
 import { log } from "./log.js";
+import type { ReviewAdversarialMode } from "./domain/risk.js";
 
 export interface RepoSpec {
   owner: string;
   repo: string;
 }
 
-export type ReviewAdversarialMode = "off" | "auto" | "always";
+export type { ReviewAdversarialMode };
 
 export interface Config {
   githubToken: string;
@@ -26,11 +27,19 @@ export interface Config {
   reviewAdversarialAgent: string;
   processExistingCommentsOnFirstRun: boolean;
   agentSelfUser: string | null;
+  allowedAuthors: string[] | null;
   stateDir: string;
   zcodeBin: string;
   claudeCodeBin: string;
   codexBin: string;
   keepWorkdirs: boolean;
+  host: string;
+  port: number;
+  webhookSecret: string | null;
+  publicUrl: string | null;
+  tailscaleFunnel: boolean;
+  maxConcurrentRuns: number;
+  autoReview: boolean;
 }
 
 export interface LoadConfigOptions {
@@ -66,6 +75,14 @@ function parseRepos(raw: string): RepoSpec[] {
     });
 }
 
+function parseList(raw: string): string[] | null {
+  const items = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : null;
+}
+
 export function loadConfig(options: LoadConfigOptions = {}): Config {
   const requireRepos = options.requireRepos ?? true;
   const rawRepos = process.env.REPOS?.trim() ?? "";
@@ -79,7 +96,7 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   const cfg: Config = {
     githubToken: required("GITHUB_TOKEN"),
     repos: rawRepos === "" ? [] : parseRepos(rawRepos),
-    pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "60")),
+    pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "300")),
     commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "10")),
     commentBatchMinComments: Number(
       optional("COMMENT_BATCH_MIN_COMMENTS", "2"),
@@ -102,11 +119,19 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     processExistingCommentsOnFirstRun:
       optional("PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN", "false") === "true",
     agentSelfUser: optional("AGENT_SELF_USER", "") || null,
+    allowedAuthors: parseList(optional("ALLOWED_AUTHORS", "")),
     stateDir: resolve(optional("STATE_DIR", "./state")),
     zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
     codexBin: optional("CODEX_BIN", "codex"),
     keepWorkdirs: optional("KEEP_WORKDIRS", "false") === "true",
+    host: optional("HOST", "127.0.0.1"),
+    port: Number(optional("PORT", "3773")),
+    webhookSecret: optional("WEBHOOK_SECRET", "") || null,
+    publicUrl: optional("PUBLIC_URL", "") || null,
+    tailscaleFunnel: optional("TAILSCALE_FUNNEL", "false") === "true",
+    maxConcurrentRuns: Number(optional("MAX_CONCURRENT_RUNS", "3")),
+    autoReview: optional("AUTO_REVIEW", "false") === "true",
   };
 
   if (!Number.isFinite(cfg.pollIntervalSec) || cfg.pollIntervalSec < 5) {
@@ -154,6 +179,22 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   if (!Number.isInteger(cfg.agentMaxAttempts) || cfg.agentMaxAttempts < 1) {
     throw new Error("AGENT_MAX_ATTEMPTS must be an integer >= 1.");
   }
+  if (!Number.isInteger(cfg.port) || cfg.port < 1 || cfg.port > 65535) {
+    throw new Error("PORT must be an integer between 1 and 65535.");
+  }
+  if (!Number.isInteger(cfg.maxConcurrentRuns) || cfg.maxConcurrentRuns < 1) {
+    throw new Error("MAX_CONCURRENT_RUNS must be an integer >= 1.");
+  }
+  if (
+    cfg.publicUrl !== null &&
+    !cfg.publicUrl.startsWith("https://") &&
+    !cfg.publicUrl.startsWith("http://")
+  ) {
+    throw new Error("PUBLIC_URL must start with https:// or http://.");
+  }
+  if ((cfg.publicUrl !== null || cfg.tailscaleFunnel) && !cfg.webhookSecret) {
+    throw new Error("WEBHOOK_SECRET is required when webhooks are enabled.");
+  }
   if (requireRepos && cfg.repos.length === 0) {
     throw new Error("REPOS must list at least one owner/repo.");
   }
@@ -171,6 +212,7 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     prContextHistoryLimit: cfg.prContextHistoryLimit,
     agentRetryDelaySec: cfg.agentRetryDelaySec,
     agentMaxAttempts: cfg.agentMaxAttempts,
+    allowedAuthors: cfg.allowedAuthors,
     stateDir: cfg.stateDir,
   });
   return cfg;

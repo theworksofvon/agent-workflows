@@ -15,6 +15,9 @@ concurrency:
   group: main-validation-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
 jobs:
   platform:
     name: Platform (${{ matrix.os }})
@@ -28,23 +31,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test:typecheck
-      - run: pnpm build
-      - run: pnpm test
-      - run: pnpm test:smoke
-      - run: pnpm test:python
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run typecheck
+      - run: mise run typecheck:tests
+      - run: mise run test
+      - run: mise run test:smoke
 
   quality:
     name: Main Quality Gates
@@ -52,18 +44,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm check:scripts
-      - run: shellcheck scripts/*.sh
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run lint
+      - run: mise run format:check
+      - run: mise run check:scripts
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 
@@ -73,12 +58,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
       - run: pnpm audit --prod --audit-level high

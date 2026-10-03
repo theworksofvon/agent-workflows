@@ -1,12 +1,5 @@
 #!/usr/bin/env node
-import {
-  accessSync,
-  constants,
-  existsSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-} from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -25,11 +18,11 @@ check(
 );
 checkCommand("git", ["--version"], "Git");
 checkCommand("pnpm", ["--version"], "pnpm");
-check(existsSync(envPath), ".env exists", "Run pnpm run setup to create .env");
+check(existsSync(envPath), ".env exists", "Run mise run setup to create .env");
 check(
-  existsSync(join(repoRoot, "dist", "index.js")),
+  existsSync(join(repoRoot, "dist", "main.js")),
   "Compiled production entrypoint exists",
-  "Run pnpm build to create dist/index.js",
+  "Run mise run build to create dist/main.js",
 );
 
 const token = env.GITHUB_TOKEN ?? "";
@@ -60,22 +53,35 @@ const agents = new Set([primaryAgent]);
 if (env.REVIEW_ADVERSARIAL_AGENT) agents.add(env.REVIEW_ADVERSARIAL_AGENT);
 for (const agent of agents) checkAgent(agent);
 
-const sourceSkills = join(repoRoot, "skills");
-for (const runtime of [".codex", ".claude", ".cursor"]) {
-  const targetRoot = join(homedir(), runtime, "skills");
-  const missing = [];
-  for (const skill of portableSkillNames(sourceSkills)) {
-    const source = join(sourceSkills, skill);
-    const target = join(targetRoot, skill);
-    if (!sameRealPath(source, target)) missing.push(skill);
-  }
-  if (missing.length === 0) {
-    pass(`${runtime} portable skills are linked`);
-  } else {
+const requiredSkills = ["pr-feedback", "pr-reviewer"];
+const skillRoots = {
+  codex: join(homedir(), ".codex", "skills"),
+  "claude-code": join(homedir(), ".claude", "skills"),
+  zcode: null,
+};
+for (const agent of agents) {
+  const root = skillRoots[agent];
+  if (!root) continue;
+  const missing = requiredSkills.filter(
+    (s) => !existsSync(join(root, s, "SKILL.md")),
+  );
+  if (missing.length === 0) pass(`${agent} has the required skills`);
+  else
     warn(
-      `${runtime} is missing shared skills: ${missing.join(", ")}; run pnpm skills:install`,
+      `${agent} is missing skills: ${missing.join(", ")}; install them from vstack`,
     );
-  }
+}
+
+const funnel = env.TAILSCALE_FUNNEL === "true";
+if (env.PUBLIC_URL || funnel) {
+  check(
+    Boolean(env.WEBHOOK_SECRET),
+    "WEBHOOK_SECRET is configured",
+    "WEBHOOK_SECRET is required when webhooks are enabled",
+  );
+  if (funnel) checkCommand("tailscale", ["version"], "Tailscale");
+} else {
+  pass("Webhooks disabled; polling only");
 }
 
 if (failures > 0) {
@@ -178,24 +184,6 @@ function findExecutable(command) {
     }
   }
   return null;
-}
-
-function portableSkillNames(root) {
-  return readdirSync(root, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isDirectory() && existsSync(join(root, entry.name, "SKILL.md")),
-    )
-    .map((entry) => entry.name)
-    .sort();
-}
-
-function sameRealPath(left, right) {
-  try {
-    return realpathSync(left) === realpathSync(right);
-  } catch {
-    return false;
-  }
 }
 
 function parseEnv(text) {
