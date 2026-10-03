@@ -70,3 +70,17 @@ test("idle resolves immediately when nothing is queued", async () => {
     new Dispatcher(1).idle().then(resolve, reject);
   });
 });
+
+test("a synchronous throw does not wedge its lane", async () => {
+  const d = new Dispatcher(1);
+  const ran: string[] = [];
+  d.enqueue("a", (() => {
+    throw new Error("sync boom");
+  }) as () => Promise<void>);
+  d.enqueue("a", async () => {
+    ran.push("second");
+  });
+  await d.idle();
+  assert.deepEqual(ran, ["second"]);
+  assert.equal(d.running, 0);
+});

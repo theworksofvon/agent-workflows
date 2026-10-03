@@ -802,6 +802,8 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
       stop() {
         calls.push("stopped");
       },
+      dispatchEvents() {},
+      async idle() {},
     }),
     reviewPullRequest: async () => {
       calls.push("reviewed");
@@ -1030,7 +1032,7 @@ test("default daemon wires batches to feedback handling and ready PRs to posting
         git,
       });
       const repo = { owner: "owner", repo: "repo" };
-      daemon.dispatchEvents?.(
+      daemon.dispatchEvents(
         [
           {
             kind: "pull_request_ready",
@@ -1063,7 +1065,7 @@ test("default daemon wires batches to feedback handling and ready PRs to posting
           },
         ],
       );
-      await daemon.idle?.();
+      await daemon.idle();
       assert.ok(seen.includes("review"), mode);
       assert.ok(seen.includes("workdir"), mode);
     }

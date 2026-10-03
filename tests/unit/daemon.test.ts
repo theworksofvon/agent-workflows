@@ -310,3 +310,28 @@ test("auto-review is ignored when disabled or unwired, and comment events are no
   unwired.dispatchEvents([{ kind: "pull_request_ready", pr }], []);
   await unwired.idle();
 });
+
+test("same PR number in different repos uses different lanes", async () => {
+  const started: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  const daemon = new Daemon(
+    ports({
+      dispatcher: new Dispatcher(2),
+      handleBatch: async (b) => {
+        started.push(b.batchId);
+        await gate;
+      },
+    }),
+  );
+  daemon.dispatchEvents([], [
+    { batchId: "x", repo: { owner: "o", repo: "one" }, prNumber: 5 },
+    { batchId: "y", repo: { owner: "o", repo: "two" }, prNumber: 5 },
+  ] as CommentBatch[]);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(started, ["x", "y"]);
+  release();
+  await daemon.idle();
+});

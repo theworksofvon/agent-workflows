@@ -6,6 +6,7 @@ import { GitHubClient } from "./adapters/github/octokit.js";
 import { pollRepos } from "./services/poll.js";
 import { jsonFileState } from "./adapters/state/json-file.js";
 import { gitExec } from "./adapters/git/exec.js";
+import type { StateFactory } from "./adapters/state/state.interface.js";
 import type { GitPort } from "./adapters/git/git.interface.js";
 import type { CommentBatch } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
@@ -27,6 +28,7 @@ export interface CliDependencies {
   createPoll(args: {
     config: Config;
     client: GitHubClient;
+    state?: StateFactory;
   }): () => Promise<CommentBatch[]>;
   createDaemon(args: {
     config: Config;
@@ -34,8 +36,8 @@ export interface CliDependencies {
     client: GitHubClient;
     agent: AgentAdapter;
     git?: GitPort;
-  }): Pick<Daemon, "start" | "stop"> &
-    Partial<Pick<Daemon, "dispatchEvents" | "idle">>;
+    state?: StateFactory;
+  }): Pick<Daemon, "start" | "stop" | "dispatchEvents" | "idle">;
   reviewPullRequest: typeof reviewPullRequest;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
@@ -46,12 +48,17 @@ export const defaultCliDependencies: CliDependencies = {
   loadConfig,
   createClient: (token) => new GitHubClient(token),
   getAgent,
-  createPoll: ({ config, client }) => {
-    const state = jsonFileState(config);
+  createPoll: ({ config, client, state = jsonFileState(config) }) => {
     return () => pollRepos({ config, client, state });
   },
-  createDaemon: ({ config, poll, client, agent, git = gitExec }) => {
-    const state = jsonFileState(config);
+  createDaemon: ({
+    config,
+    poll,
+    client,
+    agent,
+    git = gitExec,
+    state = jsonFileState(config),
+  }) => {
     const ports: FeedbackPorts = {
       config,
       agent,
@@ -59,10 +66,6 @@ export const defaultCliDependencies: CliDependencies = {
       github: client,
       state,
     };
-    const adversarialAgent =
-      config.reviewAdversarialMode === "off"
-        ? undefined
-        : getAgent(config.reviewAdversarialAgent, config);
     return new Daemon({
       config,
       poll,
@@ -74,7 +77,11 @@ export const defaultCliDependencies: CliDependencies = {
           git,
           state,
           agent,
-          adversarialAgent,
+          adversarialAgent: adversarialAgentFor(
+            config.reviewAdversarialMode,
+            config,
+            getAgent,
+          ),
           adversarialMode: config.reviewAdversarialMode,
           target,
           post: true,
@@ -86,6 +93,16 @@ export const defaultCliDependencies: CliDependencies = {
   exit: process.exit.bind(process),
   writeLine: console.log,
 };
+
+function adversarialAgentFor(
+  mode: ReviewAdversarialMode,
+  config: Config,
+  resolve: CliDependencies["getAgent"],
+): AgentAdapter | undefined {
+  return mode === "off"
+    ? undefined
+    : resolve(config.reviewAdversarialAgent, config);
+}
 
 export async function runCli(
   args: string[],
@@ -108,8 +125,16 @@ export async function runCli(
   const client = dependencies.createClient(config.githubToken);
   const agent = dependencies.getAgent(config.agent, config);
 
-  const poll = dependencies.createPoll({ config, client });
-  const daemon = dependencies.createDaemon({ config, poll, client, agent });
+  // Poll and handlers must share one store per repo or they overwrite each other.
+  const state = jsonFileState(config);
+  const poll = dependencies.createPoll({ config, client, state });
+  const daemon = dependencies.createDaemon({
+    config,
+    poll,
+    client,
+    agent,
+    state,
+  });
 
   const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });
@@ -183,10 +208,11 @@ export async function runReviewCommand(
     : skipAdversarial
       ? "off"
       : config.reviewAdversarialMode;
-  const adversarialAgent =
-    adversarialMode === "off"
-      ? undefined
-      : dependencies.getAgent(config.reviewAdversarialAgent, config);
+  const adversarialAgent = adversarialAgentFor(
+    adversarialMode,
+    config,
+    dependencies.getAgent,
+  );
   const result = await dependencies.reviewPullRequest({
     config,
     github: client,

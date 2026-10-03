@@ -44,7 +44,8 @@ export class Dispatcher {
       const task = queue.shift()!;
       this.active.add(lane);
       this.runningCount += 1;
-      void task()
+      void Promise.resolve()
+        .then(task)
         .catch((err) =>
           log.error("dispatched task failed", { lane, error: String(err) }),
         )

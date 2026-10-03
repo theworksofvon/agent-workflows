@@ -392,7 +392,20 @@ function inferCursorsFromHistory(history: BatchHistory[]): GitHubRepoCursors {
   return cursors;
 }
 
-export const jsonFileState =
-  (config: Config): StateFactory =>
-  (repo) =>
-    GitHubRepoStateStore.fromConfig(config, repo);
+/**
+ * One store per repo per factory. Stores snapshot their file on construction
+ * and rewrite it whole on every change, so concurrent lanes must share the
+ * same in-memory object or the last writer drops the others' updates.
+ */
+export const jsonFileState = (config: Config): StateFactory => {
+  const stores = new Map<string, GitHubRepoStateStore>();
+  return (repo) => {
+    const key = `${repo.owner}/${repo.repo}`;
+    let store = stores.get(key);
+    if (!store) {
+      store = GitHubRepoStateStore.fromConfig(config, repo);
+      stores.set(key, store);
+    }
+    return store;
+  };
+};

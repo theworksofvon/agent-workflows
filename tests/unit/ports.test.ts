@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../../src/config.js";
+import type { CommentBatch } from "../../src/domain/events.js";
 import {
   GitHubRepoStateStore,
   jsonFileState,
@@ -67,6 +68,56 @@ test("jsonFileState builds a per-repo store from config", () => {
       factory({ owner: "o", repo: "other" }).hasSeenDelivery("d1"),
       false,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("jsonFileState shares one store per repo", () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-ports-"));
+  try {
+    const config = {
+      stateDir: root,
+      processedCommentKeyLimit: 5,
+      commentBatchHistoryLimit: 5,
+    } as Config;
+    const factory = jsonFileState(config);
+    const a = factory({ owner: "o", repo: "r" });
+    assert.equal(factory({ owner: "o", repo: "r" }), a);
+    assert.notEqual(factory({ owner: "o", repo: "other" }), a);
+    assert.notEqual(factory({ owner: "p", repo: "r" }), a);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("handles from one factory do not lose each other's writes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-ports-"));
+  try {
+    const config = {
+      stateDir: root,
+      processedCommentKeyLimit: 5,
+      commentBatchHistoryLimit: 5,
+    } as Config;
+    const factory = jsonFileState(config);
+    const repo = { owner: "o", repo: "r" };
+    const a = factory(repo);
+    const b = factory(repo);
+    a.markBatchCompleted({
+      comments: [{ key: "c1" }],
+    } as unknown as CommentBatch);
+    b.recordPrHistory(1, {
+      batchId: "b1",
+      handledAt: "",
+      agent: "x",
+      exitCode: 0,
+      commitCount: 0,
+      commentKeys: [],
+      summary: "s",
+    });
+    const reloaded = jsonFileState(config)(repo);
+    assert.equal(reloaded.hasProcessedComment("c1"), true);
+    assert.equal(reloaded.getRecentPrHistory(1, 5).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
