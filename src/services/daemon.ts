@@ -35,7 +35,15 @@ export interface DaemonPorts {
   listener?: { host: string; port: number };
   receiveDelivery?: (delivery: RawDelivery) => Promise<WebhookResult>;
   startListener?: StartListener;
+  /** Re-checks a repo's pending groups once the quiet window has passed. */
+  takeReady?: (repo: RepoRef) => CommentBatch[];
 }
+
+/**
+ * Timer slack after the quiet window. The window is measured from the
+ * delivery's own clock, so a timer firing exactly on it can land a hair early.
+ */
+const READY_CHECK_SLACK_MS = 100;
 
 /**
  * How long stop() waits for running agent lanes. launchd kills after 20s and
@@ -62,6 +70,10 @@ export class Daemon {
   private lifecycleGeneration = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private webhookListener: WebhookListener | undefined;
+  private readonly readyTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(private readonly ports: DaemonPorts) {
     this.dispatcher =
@@ -96,6 +108,8 @@ export class Daemon {
       this.clearTimer(this.timer);
       this.timer = undefined;
     }
+    for (const timer of this.readyTimers.values()) this.clearTimer(timer);
+    this.readyTimers.clear();
     const listener = this.webhookListener;
     this.webhookListener = undefined;
     if (listener) await listener.close();
@@ -132,6 +146,8 @@ export class Daemon {
       onDelivery: async (delivery) => {
         const result = await receiveDelivery(delivery);
         this.dispatchEvents(result.events, result.ready);
+        const comment = result.events.find((e) => e.kind === "comment");
+        if (comment) this.armReadyCheck(comment.pr.repo);
         return result;
       },
     });
@@ -139,6 +155,31 @@ export class Daemon {
     if (!this.isCurrentRun(generation)) return handle.close();
     this.webhookListener = handle;
     log.info("webhook listener started", { url: handle.url });
+  }
+
+  /**
+   * A comment that just arrived can never pass the quiet window at delivery
+   * time, and without this the batch would wait for the next poll tick. Each
+   * new delivery restarts the timer so it fires after the latest comment.
+   */
+  private armReadyCheck(repo: RepoRef): void {
+    const { takeReady, config } = this.ports;
+    if (!takeReady || !this.running) return;
+    const key = `${repo.owner}/${repo.repo}`;
+    const existing = this.readyTimers.get(key);
+    if (existing !== undefined) this.clearTimer(existing);
+    const delay = config.commentBatchWindowSec * 1000 + READY_CHECK_SLACK_MS;
+    this.readyTimers.set(
+      key,
+      this.setTimer(() => {
+        this.readyTimers.delete(key);
+        try {
+          this.dispatchEvents([], takeReady(repo));
+        } catch (err) {
+          log.error("ready check failed", { repo: key, error: String(err) });
+        }
+      }, delay),
+    );
   }
 
   private scheduleNext(generation: number): void {

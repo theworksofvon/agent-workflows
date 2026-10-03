@@ -518,6 +518,145 @@ test("a delivery's events and ready batches are dispatched and its result return
   await daemon.stop();
 });
 
+function fakeTimers(): {
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
+  armed: Array<{ callback: () => void; delay: number; handle: object }>;
+  cleared: object[];
+} {
+  const armed: Array<{ callback: () => void; delay: number; handle: object }> =
+    [];
+  const cleared: object[] = [];
+  return {
+    armed,
+    cleared,
+    setTimeout: ((callback: () => void, delay: number) => {
+      const handle = { delay };
+      armed.push({ callback, delay, handle });
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout,
+    clearTimeout: ((handle: object) => {
+      cleared.push(handle);
+    }) as unknown as typeof clearTimeout,
+  };
+}
+
+const commentDelivery = (ready: CommentBatch[] = []) => ({
+  status: 202,
+  reason: "accepted",
+  events: [{ kind: "comment" as const, pr, comment }],
+  ready,
+});
+
+test("a comment delivery arms a ready check after the quiet window, re-armed per delivery", async () => {
+  const listener = fakeListener();
+  const timers = fakeTimers();
+  const handled: string[] = [];
+  const taken: string[] = [];
+  const daemon = new Daemon(
+    ports({
+      config: { ...makeConfig(), commentBatchWindowSec: 10 },
+      handleBatch: async (b) => {
+        handled.push(b.batchId);
+      },
+      listener: { host: "127.0.0.1", port: 0 },
+      receiveDelivery: async () => commentDelivery(),
+      startListener: listener.startListener,
+      takeReady: (repo) => {
+        taken.push(`${repo.owner}/${repo.repo}`);
+        return [batch];
+      },
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    }),
+  );
+  await daemon.start();
+  const raw = { id: "d", event: "issue_comment", signature256: null, body: "" };
+  await listener.deliver(raw);
+  await listener.deliver(raw);
+  const ready = timers.armed.filter((t) => t.delay === 10_100);
+  assert.equal(ready.length, 2);
+  // The first timer was replaced by the second delivery.
+  assert.deepEqual(timers.cleared, [ready[0].handle]);
+  assert.deepEqual(taken, []);
+
+  ready[1].callback();
+  await daemon.idle();
+  assert.deepEqual(taken, ["owner/repo"]);
+  assert.deepEqual(handled, [batch.batchId]);
+
+  // A pending ready check is dropped on stop.
+  await listener.deliver(raw);
+  const third = timers.armed.filter((t) => t.delay === 10_100)[2];
+  await daemon.stop();
+  assert.ok(timers.cleared.includes(third.handle));
+});
+
+test("ready checks are not armed without comment events, without takeReady, or after stop", async () => {
+  const listener = fakeListener();
+  const timers = fakeTimers();
+  const daemon = new Daemon(
+    ports({
+      config: { ...makeConfig(), commentBatchWindowSec: 10 },
+      listener: { host: "127.0.0.1", port: 0 },
+      receiveDelivery: async (d) =>
+        d.id === "no-comments"
+          ? { status: 202, reason: "accepted", events: [], ready: [] }
+          : commentDelivery(),
+      startListener: listener.startListener,
+      takeReady: () => {
+        throw new Error("boom");
+      },
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    }),
+  );
+  await daemon.start();
+  await listener.deliver({
+    id: "no-comments",
+    event: "pull_request",
+    signature256: null,
+    body: "",
+  });
+  assert.equal(timers.armed.filter((t) => t.delay === 10_100).length, 0);
+
+  // A failing takeReady is logged, not thrown out of the timer.
+  await listener.deliver({ id: "c", event: "x", signature256: null, body: "" });
+  const [armed] = timers.armed.filter((t) => t.delay === 10_100);
+  const original = console.error;
+  const errors: string[] = [];
+  console.error = (line: string) => {
+    errors.push(line);
+  };
+  try {
+    armed.callback();
+  } finally {
+    console.error = original;
+  }
+  assert.ok(errors.some((l) => l.includes("ready check failed")));
+
+  await daemon.stop();
+  // The listener is closed, but a late in-flight delivery must not arm anything.
+  await listener.deliver({
+    id: "late",
+    event: "x",
+    signature256: null,
+    body: "",
+  });
+  assert.equal(timers.armed.filter((t) => t.delay === 10_100).length, 1);
+
+  const unwired = new Daemon(
+    ports({
+      listener: { host: "127.0.0.1", port: 0 },
+      receiveDelivery: async () => commentDelivery(),
+      startListener: fakeListener().startListener,
+      setTimeout: timers.setTimeout,
+    }),
+  );
+  await unwired.start();
+  await unwired.stop();
+});
+
 test("start without all listener ports opens no listener", async () => {
   const listener = fakeListener();
   for (const partial of [

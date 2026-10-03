@@ -1244,6 +1244,13 @@ test("default daemon serves webhooks only when a public route is configured, thr
         assert.deepEqual(opened, [{ owner: "owner", repo: "repo" }]);
         await daemon.idle();
         assert.equal(opened.length, 1);
+        // The ready check fires after the (zero-second) quiet window and
+        // re-opens the same repo's state through the shared factory.
+        await new Promise((done) => setTimeout(done, 150));
+        assert.deepEqual(opened, [
+          { owner: "owner", repo: "repo" },
+          { owner: "owner", repo: "repo" },
+        ]);
       } finally {
         await daemon.stop();
       }
@@ -1460,7 +1467,7 @@ test("service install fails clearly when the compiled entry is missing", async (
   const fake = fakeCli({ fileExists: () => false });
   await assert.rejects(
     runCli(["service", "install"], fake.dependencies),
-    /^Error: Build first: .*dist.main\.js does not exist \(run pnpm build\)\.$/,
+    /^Error: Build first: .*dist.main\.js does not exist \(run mise run build\)\.$/,
   );
   assert.equal(fake.lines.length, 0);
 });

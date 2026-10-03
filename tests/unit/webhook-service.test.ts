@@ -9,6 +9,7 @@ import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
 import type { PullRequest, RawDelivery } from "../../src/domain/events.js";
 import {
   receiveDelivery,
+  takeReadyBatches,
   verifyWebhookSignature,
   type WebhookPorts,
 } from "../../src/services/webhook.js";
@@ -229,6 +230,26 @@ test("a review comment delivery is ingested and its batch is ready", async () =>
     // Only the poller moves cursors, so a lost delivery is still reconciled.
     assert.equal(store?.getReviewCommentCursor(4), 0);
     assert.equal(store?.hasSeenDelivery("d1"), true);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("takeReadyBatches hands out a batch once its quiet window has passed", async () => {
+  const h = harness({ commentBatchWindowSec: 10 });
+  try {
+    const result = await receiveDelivery(
+      delivery("pull_request_review_comment", reviewCommentPayload),
+      h.ports,
+    );
+    assert.equal(result.ready.length, 0);
+    assert.equal(takeReadyBatches(pr.repo, h.ports).length, 0);
+    const later = takeReadyBatches(pr.repo, {
+      ...h.ports,
+      now: () => 1_000 + 10_000,
+    });
+    assert.equal(later.length, 1);
+    assert.equal(later[0].comments[0].key, "o/r#4:review:5");
   } finally {
     h.cleanup();
   }

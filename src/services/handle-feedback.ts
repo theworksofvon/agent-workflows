@@ -119,7 +119,7 @@ export async function handleFeedback(
     );
 
   let workdir: WorkdirHandle | undefined;
-  try {
+  const run = async (): Promise<FeedbackOutcome> => {
     fs.mkdirSync(runDir, { recursive: true });
     // A kept run dir from an earlier attempt must not satisfy this run's report.
     fs.rmSync(reportPath, { force: true });
@@ -226,6 +226,10 @@ export async function handleFeedback(
     return ahead > 0
       ? { kind: "pushed", commits: ahead, report }
       : { kind: "no-changes", report };
+  };
+
+  try {
+    return await run();
   } catch (err) {
     // The batch was taken from pending before this run started; a thrown
     // error must put it back or give it a recorded end, never drop it.

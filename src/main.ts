@@ -9,7 +9,7 @@ import { jsonFileState } from "./adapters/state/json-file.js";
 import { gitExec } from "./adapters/git/exec.js";
 import type { StateFactory } from "./adapters/state/state.interface.js";
 import type { GitPort } from "./adapters/git/git.interface.js";
-import type { CommentBatch, RawDelivery } from "./domain/events.js";
+import type { CommentBatch, RawDelivery, RepoRef } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
 import { Daemon } from "./services/daemon.js";
@@ -20,7 +20,7 @@ import {
 import { log } from "./log.js";
 import { parseReviewTarget } from "./domain/target.js";
 import { reviewPullRequest } from "./services/review-pr.js";
-import { receiveDelivery } from "./services/webhook.js";
+import { receiveDelivery, takeReadyBatches } from "./services/webhook.js";
 import { startWebhookListener } from "./adapters/http/listener.js";
 import type { ReviewRunResult } from "./services/review-pr.js";
 import { tailscaleCli } from "./adapters/tailscale/cli.js";
@@ -103,6 +103,8 @@ export const defaultCliDependencies: CliDependencies = {
           receiveDelivery: (delivery: RawDelivery) =>
             receiveDelivery(delivery, { config, github: client, state }),
           startListener: startWebhookListener,
+          takeReady: (repo: RepoRef) =>
+            takeReadyBatches(repo, { config, state }),
         }
       : {};
     return new Daemon({
@@ -316,7 +318,7 @@ export async function runServiceCommand(
   if (command === "install") {
     if (!dependencies.fileExists(spec.entryPath)) {
       throw new Error(
-        `Build first: ${spec.entryPath} does not exist (run pnpm build).`,
+        `Build first: ${spec.entryPath} does not exist (run mise run build).`,
       );
     }
     dependencies.writeLine(`Installed ${await manager.install(spec)}`);

@@ -748,6 +748,45 @@ test("a thrown error pauses the batch for retry and still removes the run direct
   }
 });
 
+test("leftover uncommitted agent work is committed by the orchestrator and counted", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const git = fakeGit(root, { ahead: 1 }, calls);
+    const commits: string[] = [];
+    git.commitUncommittedChanges = (_path, message) => {
+      commits.push(message);
+      return true;
+    };
+    const outcome = await handleFeedback(
+      batch(),
+      ports(root, reportWritingAgent(fullReport), git, calls),
+    );
+    assert.equal(outcome.kind, "pushed");
+    assert.deepEqual(commits, ["Address PR #4 review comments"]);
+    assert.equal(calls.pushes, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-Error throw is stringified into the retry record", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const git = fakeGit(root, {}, calls);
+    git.prepareWorkdir = () => {
+      throw "disk full";
+    };
+    const p = ports(root, reportWritingAgent(fullReport), git, calls);
+    const outcome = await handleFeedback({ ...batch(), attempts: 3 }, p);
+    assert.deepEqual(outcome, { kind: "failed", error: "disk full" });
+    assert.match(calls.comments[0], /disk full/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a thrown error at max attempts posts a failure summary and marks the batch processed", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
   const calls = newCalls();

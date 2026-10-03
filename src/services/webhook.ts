@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Config } from "../config.js";
 import type { GitHubPort } from "../adapters/github/github.interface.js";
-import type { StateFactory } from "../adapters/state/state.interface.js";
+import type {
+  RepoStatePort,
+  StateFactory,
+} from "../adapters/state/state.interface.js";
 import type { IngestPolicy } from "../domain/batching.js";
 import type {
   CommentBatch,
@@ -97,12 +100,36 @@ export async function receiveDelivery(
     if (event.kind !== "comment") continue;
     ingestComment({ state, pr: event.pr, comment: event.comment, now, policy });
   }
-  const ready = state.takeReadyCommentBatches(now, {
+  return {
+    status: 202,
+    reason: "accepted",
+    events,
+    ready: takeReadyFrom(state, config, now),
+  };
+}
+
+/** Pulls whatever batches are ready for one repo under the configured policy. */
+export function takeReadyBatches(
+  repo: RepoRef,
+  ports: Pick<WebhookPorts, "config" | "state" | "now">,
+): CommentBatch[] {
+  return takeReadyFrom(
+    ports.state(repo),
+    ports.config,
+    (ports.now ?? Date.now)(),
+  );
+}
+
+function takeReadyFrom(
+  state: RepoStatePort,
+  config: Config,
+  now: number,
+): CommentBatch[] {
+  return state.takeReadyCommentBatches(now, {
     quietWindowMs: config.commentBatchWindowSec * 1000,
     minComments: config.commentBatchMinComments,
     maxWaitMs: config.commentBatchMaxWaitSec * 1000,
   });
-  return { status: 202, reason: "accepted", events, ready };
 }
 
 function reply(status: number, reason: string): WebhookResult {
