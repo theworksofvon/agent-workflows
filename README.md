@@ -26,7 +26,8 @@ GitHub poll ────┘                                                  ↘
 ### Prerequisites
 
 - Git
-- Node 24 and pnpm 11 (`.nvmrc` and `package.json` pin the supported runtime)
+- [mise](https://mise.jdx.dev), which installs the pinned Node 24 and pnpm 11
+  from `mise.toml`. Without mise, install those two versions yourself.
 - A GitHub token
 - At least one supported agent CLI: Codex, Claude Code, or ZCode
 - Tailscale only when using `TAILSCALE_FUNNEL=true`
@@ -36,9 +37,7 @@ GitHub poll ────┘                                                  ↘
 ```bash
 git clone <repository-url>
 cd agent-workflows
-nvm use                       # or install Node 24 another way
-corepack enable
-corepack install --global pnpm@11.15.0
+mise install                  # Node 24 and pnpm 11 from mise.toml
 pnpm run setup
 ```
 

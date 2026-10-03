@@ -1,0 +1,9 @@
+# Toolchain for this checkout. `mise install` puts both on PATH at these
+# versions whenever you are inside the repo.
+#
+# pnpm is pinned to the same release as package.json's `packageManager` so
+# the version mise provides is the one pnpm would enforce anyway; keep the
+# two in step when bumping.
+[tools]
+node = "24"
+pnpm = "11.15.0"
