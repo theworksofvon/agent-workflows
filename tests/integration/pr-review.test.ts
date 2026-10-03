@@ -1,13 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type {
@@ -16,14 +10,13 @@ import type {
   AgentRunResult,
 } from "../../src/adapters/agent/agent.interface.js";
 import type { Config } from "../../src/config.js";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
 import { buildReviewPrompt } from "../../src/services/review-prompt.js";
 import {
   reviewPullRequest,
   type ReviewOptions,
 } from "../../src/services/review-pr.js";
 import { gitExec } from "../../src/adapters/git/exec.js";
-import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import { sqliteState } from "../../src/adapters/state/sqlite.js";
 import {
   DraftPullRequestError,
   ReportMissingError,
@@ -132,7 +125,7 @@ function runReview(args: ReviewArgs) {
     ...rest,
     github: client,
     git: gitExec,
-    state: jsonFileState(args.config),
+    state: sqliteState(args.config),
   });
 }
 
@@ -397,11 +390,12 @@ test("dry-run review runs agent and does not post or persist duplicate state", a
     assert.equal(result.dryRun, true);
     assert.equal(result.newFindings.length, 1);
     assert.equal(client.postedReviews.length, 0);
-    assert.equal(
-      existsSync(
-        join(config.stateDir, "github", "local-owner", "sample-repo.json"),
-      ),
-      false,
+    assert.deepEqual(
+      sqliteState(config)({
+        owner: "local-owner",
+        repo: "sample-repo",
+      }).getPostedReviewFindingKeys(1),
+      [],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -457,7 +451,7 @@ test("post mode submits one grouped review and skips duplicate findings later", 
       /agent-workflows:bot/,
     );
 
-    const state = GitHubRepoStateStore.fromConfig(config, target.repo);
+    const state = sqliteState(config)(target.repo);
     assert.equal(state.getPostedReviewFindingKeys(1).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -498,7 +492,7 @@ test("post mode skips findings that cannot attach to the PR diff", async () => {
     assert.equal(result.skippedUnpostableFindings, 1);
     assert.equal(client.postedReviews.length, 0);
 
-    const state = GitHubRepoStateStore.fromConfig(config, {
+    const state = sqliteState(config)({
       owner: "local-owner",
       repo: "sample-repo",
     });

@@ -19,7 +19,11 @@ import type {
   GitPort,
   WorkdirHandle,
 } from "../../src/adapters/git/git.interface.js";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
+import {
+  openStateDatabase,
+  SqliteRepoStateStore,
+  sqliteState,
+} from "../../src/adapters/state/sqlite.js";
 import type { CommentBatch } from "../../src/domain/events.js";
 import { MARKER_TAG } from "../../src/domain/batching.js";
 import { PushRejectedError } from "../../src/domain/errors.js";
@@ -175,8 +179,7 @@ function ports(root: string, agent: AgentAdapter, git: GitPort, calls: Calls) {
     config: cfg,
     agent,
     git,
-    state: (repo: { owner: string; repo: string }) =>
-      GitHubRepoStateStore.fromConfig(cfg, repo),
+    state: sqliteState(cfg),
     github: {
       async createComment(_r: unknown, _n: number, body: string) {
         calls.comments.push(body);
@@ -260,7 +263,7 @@ test("valid report with commits pushes, replies on skipped review threads, and s
       /2 commit\(s\) pushed\. Addressed 1, skipped 1, needs a human 0\./,
     );
     assert.equal(calls.cleanups, 1);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });
@@ -337,7 +340,7 @@ test("no report after relaunch posts a summary, pushes nothing, marks processed"
     assert.equal(agent.prompts.length, 2);
     assert.equal(calls.pushes, 0);
     assert.match(calls.comments[0], /no usable report .* batch not applied/);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });
@@ -382,7 +385,7 @@ test("rate-limited exit pauses the batch for retry", async () => {
     assert.equal(outcome.kind, "retry-scheduled");
     assert.equal(agent.prompts.length, 1);
     assert.equal(calls.comments.length, 0);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });
@@ -519,12 +522,25 @@ test("retry delay comes from the injected clock and keeps the agent's error tail
       retryAfterMs: 12_000,
     });
     assert.equal(calls.cleanups, 1);
-    const saved = JSON.parse(
-      readFileSync(join(root, "state", "github", "o", "r.json"), "utf8"),
-    );
-    const group = saved.pendingCommentGroups["pr:4:conversation"];
-    assert.equal(group.retryAfterMs, 12_000);
-    assert.equal(group.lastError, "capacity unavailable");
+    const db = openStateDatabase(join(root, "state"));
+    try {
+      const state = new SqliteRepoStateStore(db, batch().repo, {
+        processedCommentKeyLimit: 10,
+        commentBatchHistoryLimit: 10,
+      });
+      const policy = { quietWindowMs: 0, minComments: 1, maxWaitMs: 0 };
+      const [retried] = state.takeReadyCommentBatches(
+        Date.parse("2026-01-02T00:00:00Z"),
+        policy,
+      );
+      assert.equal(retried.attempts, 2);
+      assert.deepEqual(
+        retried.comments.map((c) => c.key),
+        batch().comments.map((c) => c.key),
+      );
+    } finally {
+      db.close();
+    }
     assert.equal(
       existsSync(join(root, "state", "runs", "batch_o_r_pr_4_conversation_1")),
       false,
@@ -557,7 +573,7 @@ test("history records zero commits when no report or a rejected lease leaves not
         ports(root, agent, git, calls),
       );
       assert.equal(outcome.kind, scenario);
-      const state = GitHubRepoStateStore.fromConfig(config(root), {
+      const state = sqliteState(config(root))({
         owner: "o",
         repo: "r",
       });
@@ -645,7 +661,7 @@ test("a non-lease push failure is retried while attempts remain", async () => {
     });
     assert.equal(calls.comments.length, 0);
     assert.equal(calls.replies.length, 0);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });
@@ -675,7 +691,7 @@ test("a non-lease push failure at max attempts posts push-failed and marks proce
       `${MARKER_TAG} Push failed after 3 attempts; 1 commit(s) discarded. ${fullReport.summary}`,
     );
     assert.equal(calls.replies.length, 0);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });
@@ -707,7 +723,7 @@ test("GitHub failures after a push are logged; state already records the push", 
     const outcome = await handleFeedback(batch(), p);
     assert.equal(outcome.kind, "pushed");
     assert.equal(calls.pushes, 1);
-    const state = GitHubRepoStateStore.fromConfig(config(root), {
+    const state = sqliteState(config(root))({
       owner: "o",
       repo: "r",
     });

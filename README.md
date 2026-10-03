@@ -196,8 +196,9 @@ normally afterward. To intentionally process existing comments, set:
 PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN=true
 ```
 
-When moving a running daemon to another machine, copy `state/github/` while the
-old daemon is stopped. Cached repositories and worktrees can be recreated.
+When moving a running daemon to another machine, stop the old daemon, then copy
+`state/agent-workflows.sqlite` together with its `-wal` and `-shm` siblings.
+Cached repositories and worktrees can be recreated.
 Never run two daemon instances against the same repositories and state history.
 
 ## Configuration

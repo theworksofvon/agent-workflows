@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  openStateDatabase,
+  SqliteRepoStateStore,
+} from "../../src/adapters/state/sqlite.js";
 import type { Comment, PullRequest } from "../../src/domain/events.js";
 import { ingestComment } from "../../src/services/intake.js";
 
@@ -26,15 +30,25 @@ const comment = (over: Partial<Comment> = {}): Comment => ({
   createdAt: "2026-01-01T00:00:00Z",
   ...over,
 });
+const openDatabases: DatabaseSync[] = [];
+const makeState = (root: string) => {
+  const db = openStateDatabase(root);
+  openDatabases.push(db);
+  return new SqliteRepoStateStore(db, pr.repo, {
+    processedCommentKeyLimit: 10,
+    commentBatchHistoryLimit: 5,
+  });
+};
+const cleanup = (root: string) => {
+  for (const db of openDatabases.splice(0)) db.close();
+  rmSync(root, { recursive: true, force: true });
+};
 const policy = { allowedAuthors: null, agentSelfUser: null };
 
 test("accepted comment joins a pending group and leaves cursors to the poller", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
-    const state = new GitHubRepoStateStore(root, pr.repo, {
-      processedCommentKeyLimit: 10,
-      commentBatchHistoryLimit: 5,
-    });
+    const state = makeState(root);
     const result = ingestComment({
       state,
       pr,
@@ -52,17 +66,14 @@ test("accepted comment joins a pending group and leaves cursors to the poller", 
     assert.equal(batches.length, 1);
     assert.equal(batches[0].comments[0].key, "o/r#4:issue:10");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
 test("review comments and summaries are ingested without moving any cursor", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
-    const state = new GitHubRepoStateStore(root, pr.repo, {
-      processedCommentKeyLimit: 10,
-      commentBatchHistoryLimit: 5,
-    });
+    const state = makeState(root);
     ingestComment({
       state,
       pr,
@@ -96,17 +107,14 @@ test("review comments and summaries are ingested without moving any cursor", () 
     });
     assert.equal(batch.comments[0].key, "o/r#4:review:22");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
 test("dropped and processed comments are reported with a reason", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
-    const state = new GitHubRepoStateStore(root, pr.repo, {
-      processedCommentKeyLimit: 10,
-      commentBatchHistoryLimit: 5,
-    });
+    const state = makeState(root);
     assert.deepEqual(
       ingestComment({
         state,
@@ -129,17 +137,14 @@ test("dropped and processed comments are reported with a reason", () => {
       { accepted: false, reason: "processed" },
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
 test("bot-authored review comments are dropped", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
-    const state = new GitHubRepoStateStore(root, pr.repo, {
-      processedCommentKeyLimit: 10,
-      commentBatchHistoryLimit: 5,
-    });
+    const state = makeState(root);
     const result = ingestComment({
       state,
       pr,
@@ -164,17 +169,14 @@ test("bot-authored review comments are dropped", () => {
       [],
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
 test("a comment already running in a batch is not queued a second time", () => {
   const root = mkdtempSync(join(tmpdir(), "aw-intake-"));
   try {
-    const state = new GitHubRepoStateStore(root, pr.repo, {
-      processedCommentKeyLimit: 10,
-      commentBatchHistoryLimit: 5,
-    });
+    const state = makeState(root);
     const policyNow = { quietWindowMs: 0, minComments: 1, maxWaitMs: 0 };
     ingestComment({ state, pr, now: 1, policy, comment: comment() });
     const [running] = state.takeReadyCommentBatches(1, policyNow);
@@ -187,6 +189,6 @@ test("a comment already running in a batch is not queued a second time", () => {
     );
     assert.deepEqual(state.takeReadyCommentBatches(2, policyNow), []);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });

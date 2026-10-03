@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../../src/config.js";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
+import {
+  openStateDatabase,
+  SqliteRepoStateStore,
+  STATE_DATABASE_FILE,
+} from "../../src/adapters/state/sqlite.js";
 import type { PullRequest, RawDelivery } from "../../src/domain/events.js";
 import {
   receiveDelivery,
@@ -112,14 +117,15 @@ function harness(
   fetched: PullRequest = pr,
 ): {
   ports: WebhookPorts;
-  stores: Map<string, GitHubRepoStateStore>;
+  stores: Map<string, SqliteRepoStateStore>;
   fetches: Array<{ repo: unknown; prNumber: number }>;
   cleanup: () => void;
 } {
   const root = mkdtempSync(join(tmpdir(), "aw-webhook-"));
   const cfg = config(root, over);
-  const stores = new Map<string, GitHubRepoStateStore>();
+  const stores = new Map<string, SqliteRepoStateStore>();
   const fetches: Array<{ repo: unknown; prNumber: number }> = [];
+  let db: DatabaseSync | undefined;
   return {
     stores,
     fetches,
@@ -136,7 +142,8 @@ function harness(
         const key = `${repo.owner}/${repo.repo}`;
         let store = stores.get(key);
         if (!store) {
-          store = new GitHubRepoStateStore(cfg.stateDir, repo, {
+          db ??= openStateDatabase(cfg.stateDir);
+          store = new SqliteRepoStateStore(db, repo, {
             processedCommentKeyLimit: 10,
             commentBatchHistoryLimit: 5,
           });
@@ -145,7 +152,10 @@ function harness(
         return store;
       },
     },
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      db?.close();
+      rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 
@@ -349,7 +359,7 @@ test("a delivery for an unwatched repo never touches state", async () => {
     assert.deepEqual(h.fetches, []);
     assert.equal(h.stores.size, 0);
     assert.equal(
-      existsSync(join(h.ports.config.stateDir, "github", "o")),
+      existsSync(join(h.ports.config.stateDir, STATE_DATABASE_FILE)),
       false,
     );
   } finally {
@@ -370,11 +380,7 @@ test("repo matching ignores case and keys state by the config's casing", async (
     assert.equal(result.reason, "accepted");
     assert.deepEqual(result.ready[0].repo, { owner: "Owner", repo: "Repo" });
     assert.equal(result.ready[0].comments[0].key, "Owner/Repo#4:review:5");
-    const stateDir = h.ports.config.stateDir;
-    assert.deepEqual(readdirSync(join(stateDir, "github")), ["Owner"]);
-    assert.deepEqual(readdirSync(join(stateDir, "github", "Owner")), [
-      "Repo.json",
-    ]);
+    assert.deepEqual([...h.stores.keys()], ["Owner/Repo"]);
     assert.equal(h.stores.get("Owner/Repo")?.hasSeenDelivery("d1"), true);
   } finally {
     h.cleanup();

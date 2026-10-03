@@ -12,7 +12,7 @@ import {
 } from "../../src/adapters/github/octokit.js";
 import type { GitPort } from "../../src/adapters/git/git.interface.js";
 import { getAgent } from "../../src/adapters/agent/registry.js";
-import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import { sqliteState } from "../../src/adapters/state/sqlite.js";
 import type { RepoRef } from "../../src/domain/events.js";
 import { createLogger } from "../../src/log.js";
 import {
@@ -1183,7 +1183,7 @@ test("default daemon serves webhooks only when a public route is configured, thr
         ...over,
       };
       const opened: RepoRef[] = [];
-      const shared = jsonFileState(config);
+      const shared = sqliteState(config);
       const daemon = defaultCliDependencies.createDaemon({
         config,
         poll: async () => [],

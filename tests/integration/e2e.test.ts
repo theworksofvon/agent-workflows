@@ -12,7 +12,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Config } from "../../src/config.js";
 import { GitHubClient } from "../../src/adapters/github/octokit.js";
-import { jsonFileState } from "../../src/adapters/state/json-file.js";
+import { sqliteState } from "../../src/adapters/state/sqlite.js";
 import { pollRepos } from "../../src/services/poll.js";
 import { gitExec } from "../../src/adapters/git/exec.js";
 import type { GitPort } from "../../src/adapters/git/git.interface.js";
@@ -43,7 +43,7 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
     const client = new GitHubClient("test-token", {
       baseUrl: `http://127.0.0.1:${address.port}`,
     });
-    const stateFor = jsonFileState(config);
+    const stateFor = sqliteState(config);
     const poll = () => pollRepos({ config, client, state: stateFor });
     const gitPort: GitPort = {
       ...gitExec,
@@ -86,6 +86,7 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
 
     const batches = await poll();
     assert.equal(batches.length, 1);
+    const processedKeys = batches[0].comments.map((c) => c.key);
     const outcome = await handleFeedback(batches[0], {
       config,
       agent,
@@ -102,14 +103,22 @@ test("comment delivery runs through HTTP, batching, git, agent, push, and persis
       /done\n\n1 commit\(s\) pushed\. Addressed 2, skipped 0, needs a human 0\./,
     );
     assert.equal(git(["show", "main:agent-output.txt"], remote), "implemented");
-    const state = JSON.parse(
-      readFileSync(
-        join(config.stateDir, "github", "local-owner", "sample-repo.json"),
-        "utf8",
-      ),
+    const reopened = sqliteState(config)({
+      owner: "local-owner",
+      repo: "sample-repo",
+    });
+    assert.deepEqual(
+      reopened.takeReadyCommentBatches(Number.MAX_SAFE_INTEGER, {
+        quietWindowMs: 0,
+        minComments: 0,
+        maxWaitMs: 0,
+      }),
+      [],
     );
-    assert.deepEqual(state.pendingCommentGroups, {});
-    assert.equal(state.processedCommentKeys.length, 2);
+    assert.equal(
+      processedKeys.filter((key) => reopened.hasProcessedComment(key)).length,
+      2,
+    );
     assert.ok(requests.includes("GET /repos/local-owner/sample-repo/pulls"));
     assert.ok(
       requests.includes(
@@ -150,7 +159,7 @@ test("webhook delivery runs the full path", async () => {
     const github = new GitHubClient("test-token", {
       baseUrl: `http://127.0.0.1:${address.port}`,
     });
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const gitPort: GitPort = {
       ...gitExec,
       prepareWorkdir: (args) =>

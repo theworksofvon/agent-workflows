@@ -5,7 +5,7 @@ import { loadConfig } from "./config.js";
 import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./adapters/github/octokit.js";
 import { pollRepos } from "./services/poll.js";
-import { jsonFileState } from "./adapters/state/json-file.js";
+import { sqliteState } from "./adapters/state/sqlite.js";
 import { gitExec } from "./adapters/git/exec.js";
 import type { StateFactory } from "./adapters/state/state.interface.js";
 import type { GitPort } from "./adapters/git/git.interface.js";
@@ -77,7 +77,7 @@ export const defaultCliDependencies: CliDependencies = {
   loadConfig,
   createClient: (token) => new GitHubClient(token),
   getAgent,
-  createPoll: ({ config, client, state = jsonFileState(config) }) => {
+  createPoll: ({ config, client, state = sqliteState(config) }) => {
     return () => pollRepos({ config, client, state });
   },
   createDaemon: ({
@@ -86,7 +86,7 @@ export const defaultCliDependencies: CliDependencies = {
     client,
     agent,
     git = gitExec,
-    state = jsonFileState(config),
+    state = sqliteState(config),
   }) => {
     const ports: FeedbackPorts = {
       config,
@@ -183,8 +183,9 @@ export async function runCli(
   const client = dependencies.createClient(config.githubToken);
   const agent = dependencies.getAgent(config.agent, config);
 
-  // Poll and handlers must share one store per repo or they overwrite each other.
-  const state = jsonFileState(config);
+  // Poll and handlers share one database connection and one store per repo.
+  // Only the daemon requeues batches a previous run left in flight.
+  const state = sqliteState(config, { recoverInFlight: true });
   const poll = dependencies.createPoll({ config, client, state });
   const daemon = dependencies.createDaemon({
     config,
@@ -402,7 +403,7 @@ export async function runReviewCommand(
     config,
     github: client,
     git: gitExec,
-    state: jsonFileState(config),
+    state: sqliteState(config),
     agent,
     adversarialAgent,
     adversarialMode,

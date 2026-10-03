@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Store State in SQLite
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Stop rewriting one whole JSON file per repository on every state change.
+Message: Daemon state now lives in one SQLite database, `state/agent-workflows.sqlite`, through Node's built-in `node:sqlite`; each change commits atomically, so a crash never leaves half an update.
+Added/Changed: Cursors, pending and in-flight batches, processed comment keys, seen webhook deliveries, batch and review history, and posted review findings are rows keyed by repository; the database runs in WAL mode and waits up to 5 seconds for a lock held by another process. `sqliteState(config, { recoverInFlight: true })` restores batches a previous process left in flight; only the daemon sets it, so a `review` run beside a live daemon no longer requeues its running batch. Batching, retry, restore, and retention behaviour is unchanged.
+Fixed/Removed: Removed the per-repository JSON state store and its legacy-file normalization and corrupt-file reset.
+Handoff: Existing `state/github/*.json` files are not migrated; the daemon starts from an empty database and re-establishes cursors on its first poll. To move a daemon, stop it and copy `state/agent-workflows.sqlite` with its `-wal` and `-shm` files.
+
 ### Move Developer Commands to mise
 
 Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.

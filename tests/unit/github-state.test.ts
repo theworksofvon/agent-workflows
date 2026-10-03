@@ -1,16 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
+import type { Config } from "../../src/config.js";
+import {
+  openStateDatabase,
+  SqliteRepoStateStore,
+  sqliteState,
+} from "../../src/adapters/state/sqlite.js";
+import type { DatabaseSync } from "node:sqlite";
 import type { CommentBatch } from "../../src/domain/events.js";
 
-function makeState(root: string): GitHubRepoStateStore {
-  return new GitHubRepoStateStore(
-    join(root, "state"),
+const openDatabases: DatabaseSync[] = [];
+
+function openDb(root: string): DatabaseSync {
+  const db = openStateDatabase(join(root, "state"));
+  openDatabases.push(db);
+  return db;
+}
+
+function cleanup(root: string): void {
+  for (const db of openDatabases.splice(0)) db.close();
+  rmSync(root, { recursive: true, force: true });
+}
+
+/** Opens a store the way the daemon does, so reloads restore in-flight work. */
+function makeState(
+  root: string,
+  limits = { processedCommentKeyLimit: 20, commentBatchHistoryLimit: 20 },
+): SqliteRepoStateStore {
+  return new SqliteRepoStateStore(
+    openDb(root),
     { owner: "local-owner", repo: "sample-repo" },
-    { processedCommentKeyLimit: 20, commentBatchHistoryLimit: 20 },
+    limits,
+    { recoverInFlight: true },
   );
 }
 
@@ -60,7 +84,7 @@ test("ready batches are not marked processed until completed", () => {
       true,
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -140,7 +164,7 @@ test("retryable failures pause and later re-emit the batch", () => {
       false,
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -205,7 +229,7 @@ test("a batch taken by a run that never finished is queued again on reload", () 
       true,
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -229,7 +253,7 @@ test("a restored batch without newer comments is queued as it was taken", () => 
       [100],
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -263,7 +287,7 @@ test("pausing a batch merges comments that arrived while it ran", () => {
     assert.equal(retried.lastSeenAt, new Date(3_000).toISOString());
     assert.equal(retried.attempts, 2);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -331,7 +355,7 @@ test("comment batches wait for a count threshold or maximum age", () => {
     const [agedBatch] = state.takeReadyCommentBatches(15_000, policy);
     assert.equal(agedBatch.comments.length, 1);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
@@ -352,18 +376,17 @@ test("comment cursors are tracked per pull request", () => {
     assert.equal(state.getIssueCommentCursor(3), 0);
     assert.equal(state.getReviewCommentCursor(3), 0);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
 test("state persists initialization, ordered pending comments, duplicate guards, and retained history", () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-complete-"));
   try {
-    const state = new GitHubRepoStateStore(
-      join(root, "state"),
-      { owner: "local-owner", repo: "sample-repo" },
-      { processedCommentKeyLimit: 2, commentBatchHistoryLimit: 2 },
-    );
+    const state = makeState(root, {
+      processedCommentKeyLimit: 2,
+      commentBatchHistoryLimit: 2,
+    });
     assert.equal(state.isPollingInitialized(), false);
     state.markPollingInitialized();
     state.markPollingInitialized();
@@ -472,55 +495,17 @@ test("state persists initialization, ordered pending comments, duplicate guards,
     const reloaded = makeState(root);
     assert.equal(reloaded.isPollingInitialized(), true);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
   }
 });
 
-test("state normalizes legacy files, infers cursors, applies zero limits, and resets corrupt files", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-legacy-"));
+test("zero limits keep no processed keys, history, or posted findings", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-zero-"));
   try {
-    const dir = join(root, "state", "github", "local-owner");
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, "sample-repo.json");
-    writeFileSync(
-      file,
-      JSON.stringify({
-        cursors: { issueCommentId: 7 },
-        prs: {
-          "1": {
-            cursors: { issueCommentId: 99 },
-            commentBatchHistory: [
-              {
-                batchId: "legacy",
-                handledAt: "now",
-                agent: "a",
-                exitCode: 0,
-                commitCount: 0,
-                commentKeys: [
-                  "repo#1:issue:12",
-                  "repo#1:review:20",
-                  "bad-key",
-                  "repo#1:issue:3",
-                ],
-                summary: "legacy",
-              },
-            ],
-          },
-        },
-      }),
-    );
-    const state = new GitHubRepoStateStore(
-      join(root, "state"),
-      { owner: "local-owner", repo: "sample-repo" },
-      {
-        processedCommentKeyLimit: 0,
-        commentBatchHistoryLimit: 0,
-      },
-    );
-    assert.equal(state.isPollingInitialized(), true);
-    assert.equal(state.getIssueCommentCursor(1), 99);
-    assert.equal(state.getReviewCommentCursor(1), 20);
-    assert.deepEqual(state.getRecentPrHistory(1, 0), []);
+    const state = makeState(root, {
+      processedCommentKeyLimit: 0,
+      commentBatchHistoryLimit: 0,
+    });
     state.recordPrHistory(2, {
       batchId: "gone",
       handledAt: "",
@@ -531,6 +516,7 @@ test("state normalizes legacy files, infers cursors, applies zero limits, and re
       summary: "",
     });
     assert.deepEqual(state.getRecentPrHistory(2, 2), []);
+    assert.deepEqual(state.getRecentPrHistory(2, 0), []);
     state.recordReviewRun({
       prNumber: 2,
       entry: {
@@ -544,52 +530,90 @@ test("state normalizes legacy files, infers cursors, applies zero limits, and re
       postedFindingKeys: ["gone"],
     });
     assert.deepEqual(state.getPostedReviewFindingKeys(2), []);
-
-    writeFileSync(
-      file,
-      JSON.stringify({
-        pollingInitialized: false,
-        cursors: { issueCommentId: 1, reviewCommentId: 2 },
-        pendingCommentGroups: {},
-        processedCommentKeys: ["saved"],
-        prs: {
-          "3": {
-            cursors: { reviewCommentId: 33 },
-            commentBatchHistory: [],
-            reviewRunHistory: [
-              {
-                reviewedAt: "",
-                agent: "",
-                findingCount: 0,
-                postedFindingCount: 0,
-                dryRun: true,
-                summary: "",
-              },
-            ],
-            postedReviewFindingKeys: ["finding"],
-          },
-          "4": {},
-        },
-      }),
-    );
-    const explicit = makeState(root);
-    assert.equal(explicit.isPollingInitialized(), false);
-    assert.equal(explicit.getIssueCommentCursor(3), 0);
-    assert.equal(explicit.getReviewCommentCursor(3), 33);
-    assert.equal(explicit.hasProcessedComment("saved"), true);
-    assert.deepEqual(explicit.getPostedReviewFindingKeys(3), ["finding"]);
-    assert.equal(explicit.getIssueCommentCursor(4), 0);
-
-    writeFileSync(file, "{}");
-    const emptyLegacy = makeState(root);
-    assert.equal(emptyLegacy.isPollingInitialized(), true);
-    assert.equal(emptyLegacy.getIssueCommentCursor(1), 0);
-
-    writeFileSync(file, "{");
-    const reset = makeState(root);
-    assert.equal(reset.isPollingInitialized(), false);
-    assert.equal(reset.getIssueCommentCursor(1), 0);
+    state.markBatchCompleted({
+      groupKey: "none",
+      comments: [sampleComment(1, 1_000)],
+    } as CommentBatch);
+    assert.equal(state.hasProcessedComment(sampleComment(1, 1_000).key), false);
+    state.markDeliverySeen("d1");
+    assert.equal(state.hasSeenDelivery("d1"), false);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    cleanup(root);
+  }
+});
+
+test("a change that fails partway leaves state as it was", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-rollback-"));
+  try {
+    const db = openDb(root);
+    const state = new SqliteRepoStateStore(
+      db,
+      { owner: "local-owner", repo: "sample-repo" },
+      { processedCommentKeyLimit: 20, commentBatchHistoryLimit: 20 },
+    );
+    state.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 1_000,
+      comment: sampleComment(100, 1_000),
+    });
+    const [taken] = state.takeReadyCommentBatches(2_000, immediatePolicy);
+    db.exec("DROP TABLE processed_comments");
+    assert.throws(() => state.markBatchCompleted(taken), /processed_comments/);
+
+    // The in-flight group was not removed, so a restart queues it again.
+    const [restored] = makeState(root).takeReadyCommentBatches(
+      3_000,
+      immediatePolicy,
+    );
+    assert.equal(restored.batchId, taken.batchId);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("only a factory that recovers in-flight work requeues a running batch", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-state-recover-"));
+  const config = {
+    stateDir: join(root, "state"),
+    processedCommentKeyLimit: 20,
+    commentBatchHistoryLimit: 20,
+  } as Config;
+  const repo = { owner: "local-owner", repo: "sample-repo" };
+  try {
+    const daemon = makeState(root);
+    daemon.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 1_000,
+      comment: sampleComment(100, 1_000),
+    });
+    const [running] = daemon.takeReadyCommentBatches(2_000, immediatePolicy);
+
+    // A one-off command beside the live daemon must not requeue its batch.
+    const oneOff = sqliteState(config)(repo);
+    assert.deepEqual(
+      oneOff.takeReadyCommentBatches(3_000, immediatePolicy),
+      [],
+    );
+    daemon.markBatchCompleted(running);
+    assert.equal(oneOff.hasProcessedComment(sampleComment(100, 0).key), true);
+
+    daemon.addPendingComment({
+      groupKey: "pr:1:review:10",
+      pr: samplePr,
+      now: 4_000,
+      comment: sampleComment(101, 4_000),
+    });
+    const [crashed] = daemon.takeReadyCommentBatches(5_000, immediatePolicy);
+    const restarted = sqliteState(config, { recoverInFlight: true })(repo);
+    const [restored] = restarted.takeReadyCommentBatches(
+      6_000,
+      immediatePolicy,
+    );
+    assert.equal(restored.batchId, crashed.batchId);
+    assert.equal(restored.attempts, 2);
+  } finally {
+    cleanup(root);
   }
 });

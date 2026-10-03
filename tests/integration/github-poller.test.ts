@@ -8,10 +8,7 @@ import {
   pollRepos,
   type GitHubPollingClient,
 } from "../../src/services/poll.js";
-import {
-  GitHubRepoStateStore,
-  jsonFileState,
-} from "../../src/adapters/state/json-file.js";
+import { sqliteState } from "../../src/adapters/state/sqlite.js";
 
 function makeConfig(root: string): Config {
   return {
@@ -94,7 +91,7 @@ test("github poller skips draft PRs before reading comments", async () => {
     } satisfies GitHubPollingClient;
 
     const config = makeConfig(root);
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const poll = () => pollRepos({ config, client, state });
     const events = await poll();
 
@@ -153,7 +150,7 @@ test("github poller skips fork PRs before reading comments", async () => {
     } satisfies GitHubPollingClient;
 
     const config = makeConfig(root);
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const events = await pollRepos({ config, client, state });
 
     assert.deepEqual(commentReads, [2, 2]);
@@ -219,7 +216,7 @@ test("github poller processes old draft comments after PR becomes ready", async 
     } satisfies GitHubPollingClient;
 
     const config = makeConfig(root);
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const poll = () => pollRepos({ config, client, state });
     const firstPoll = await poll();
     assert.deepEqual(
@@ -299,7 +296,7 @@ test("github poller skips existing comments on a new installation", async () => 
 
     const config = makeConfig(root);
     config.processExistingCommentsOnFirstRun = false;
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const poll = () => pollRepos({ config, client, state });
 
     assert.deepEqual(await poll(), []);
@@ -412,7 +409,7 @@ test("github poller filters self, marker, bot, cursor, and processed comments an
         ];
       },
     } satisfies GitHubPollingClient;
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const poll = () => pollRepos({ config, client, state });
     const events = await poll();
     assert.equal(events.length, 3);
@@ -449,7 +446,7 @@ test("github poller isolates repository failures and continues polling healthy r
       },
     } satisfies GitHubPollingClient;
     assert.deepEqual(
-      await pollRepos({ config, client, state: jsonFileState(config) }),
+      await pollRepos({ config, client, state: sqliteState(config) }),
       [],
     );
   } finally {
@@ -461,7 +458,7 @@ test("github poller ignores processed issue and review keys even beyond their cu
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-poller-processed-"));
   try {
     const config = makeConfig(root);
-    const state = GitHubRepoStateStore.fromConfig(config, config.repos[0]);
+    const state = sqliteState(config)(config.repos[0]);
     state.markBatchCompleted({
       repo: config.repos[0],
       prNumber: 1,
@@ -528,7 +525,7 @@ test("github poller ignores processed issue and review keys even beyond their cu
       },
     } satisfies GitHubPollingClient;
     assert.deepEqual(
-      await pollRepos({ config, client, state: jsonFileState(config) }),
+      await pollRepos({ config, client, state: sqliteState(config) }),
       [],
     );
   } finally {
@@ -566,7 +563,7 @@ test("github poller drops authors outside the allowlist but still advances the c
         return [];
       },
     } satisfies GitHubPollingClient;
-    const state = jsonFileState(config);
+    const state = sqliteState(config);
     const batches = await pollRepos({ config, client, state });
     assert.deepEqual(
       batches.flatMap((batch) => batch.comments.map((c) => c.author)),
