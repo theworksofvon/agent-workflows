@@ -311,8 +311,8 @@ async function handleGitHubRequest(
         number: 1,
         title: "Test PR",
         body: "Description",
-        head: { ref: "main" },
-        base: { ref: "main" },
+        head: { ref: "main", repo: { full_name: "local-owner/sample-repo" } },
+        base: { ref: "main", repo: { full_name: "local-owner/sample-repo" } },
         draft: false,
       },
     ]);

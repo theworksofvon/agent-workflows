@@ -42,6 +42,15 @@ export async function pollRepos(args: {
         });
         continue;
       }
+      // A fork PR's headRef names a branch in the fork, so the push would land
+      // on a same-named branch in this repo instead. Mirrors the webhook drop.
+      if (pr.fromFork) {
+        log.debug("skipping fork pr", {
+          repo: `${repo.owner}/${repo.repo}`,
+          prNumber: pr.number,
+        });
+        continue;
+      }
 
       // --- conversation comments ---
       const lastIssue = state.getIssueCommentCursor(pr.number);
