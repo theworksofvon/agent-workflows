@@ -11,6 +11,9 @@ concurrency:
   group: pr-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
 jobs:
   quality:
     name: Quality and Type Safety
@@ -19,27 +22,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
+      - name: Install toolchain from mise.toml
+        uses: jdx/mise-action@v4
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: mise run deps
       - name: Typecheck production
-        run: pnpm typecheck
+        run: mise run typecheck
       - name: Typecheck tests
-        run: pnpm test:typecheck
+        run: mise run typecheck:tests
       - name: Lint
-        run: pnpm lint
+        run: mise run lint
       - name: Check formatting
-        run: pnpm format:check
+        run: mise run format:check
       - name: Check Node scripts
-        run: pnpm check:scripts
+        run: mise run check:scripts
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 
@@ -49,15 +45,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:unit
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run test:unit
 
   integration:
     name: Integration Tests
@@ -65,15 +55,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:integration
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run test:integration
 
   coverage:
     name: Complete Runtime Coverage
@@ -81,15 +65,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run test
 
   compiled-smoke:
     name: Compiled Runtime Smoke
@@ -97,13 +75,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v6
-        with:
-          version: "11.15.0"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm test:smoke
+      - uses: jdx/mise-action@v4
+      - run: mise run deps
+      - run: mise run test:smoke

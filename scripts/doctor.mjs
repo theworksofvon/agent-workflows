@@ -18,11 +18,11 @@ check(
 );
 checkCommand("git", ["--version"], "Git");
 checkCommand("pnpm", ["--version"], "pnpm");
-check(existsSync(envPath), ".env exists", "Run pnpm run setup to create .env");
+check(existsSync(envPath), ".env exists", "Run mise run setup to create .env");
 check(
   existsSync(join(repoRoot, "dist", "main.js")),
   "Compiled production entrypoint exists",
-  "Run pnpm build to create dist/main.js",
+  "Run mise run build to create dist/main.js",
 );
 
 const token = env.GITHUB_TOKEN ?? "";

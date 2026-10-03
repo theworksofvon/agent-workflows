@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Move Developer Commands to mise
+
+Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Make mise the single place that defines the toolchain, the shell environment, and every developer command, instead of splitting them across `.nvmrc`, corepack, and `package.json` scripts.
+Message: `mise install` provides Node 24 and pnpm 11, `mise run gate` runs every check CI runs with independent tasks in parallel, and `.env` is loaded into the shell inside the repo.
+Added/Changed: `mise.toml` with tools, `[env]`, and tasks (`deps`, `setup`, `doctor`, `build`, `dev`, `typecheck`, `typecheck:tests`, `lint`, `format`, `format:check`, `check:scripts`, `test`, `test:unit`, `test:integration`, `test:smoke`, `gate`); both workflows install the toolchain with `jdx/mise-action` and call the same tasks; `package.json` scripts reduced to `start`, `review`, and `agent-workflows`; the webhook listener now re-checks a repo's pending batches once the quiet window has passed instead of waiting for the next poll.
+Fixed/Removed: Removed `.nvmrc`, the corepack install steps, and the pnpm and Node setup actions from CI; `test:typecheck` is now `typecheck:tests`.
+Handoff: Run `mise install` once in an existing checkout. The daemon under launchd or systemd still reads `.env` itself because no shell is involved there.
+
 ### Keep Batches Across Failures and Restarts
 
 Date: 2026-10-03 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.

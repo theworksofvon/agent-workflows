@@ -38,10 +38,10 @@ GitHub poll ────┘                                                  ↘
 git clone <repository-url>
 cd agent-workflows
 mise install                  # Node 24 and pnpm 11 from mise.toml
-pnpm run setup
+mise run setup
 ```
 
-`pnpm run setup` installs locked dependencies, builds production JavaScript,
+`mise run setup` installs locked dependencies, builds production JavaScript,
 and creates `.env` without overwriting an existing one.
 
 ### 2. Authenticate an agent and install its skills
@@ -79,7 +79,7 @@ Registering webhooks with `webhooks install` additionally needs
 ### 4. Verify and run
 
 ```bash
-pnpm run doctor
+mise run doctor
 pnpm start
 ```
 
@@ -96,23 +96,23 @@ across terminal exits and restarts.
 
 | Command                                  | Purpose                                                                            |
 | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `pnpm run setup`                         | Install dependencies, build, and create `.env`.                                    |
-| `pnpm run doctor`                        | Validate a machine before starting the daemon.                                     |
-| `pnpm build`                             | Compile TypeScript and source maps into `dist/`.                                   |
+| `mise run setup`                         | Install dependencies, build, and create `.env`.                                    |
+| `mise run doctor`                        | Validate a machine before starting the daemon.                                     |
+| `mise run build`                         | Compile TypeScript and source maps into `dist/`.                                   |
 | `pnpm start`                             | Run the compiled daemon with Node.                                                 |
-| `pnpm dev`                               | Run with source watching.                                                          |
+| `mise run dev`                           | Run with source watching.                                                          |
 | `pnpm review owner/repo#123`             | Review a PR locally without posting or changing files.                             |
 | `pnpm review owner/repo#123 --post`      | Post new actionable findings as one grouped review.                                |
 | `pnpm agent-workflows webhooks install`  | Create or update the GitHub webhook on every repo in `REPOS`.                      |
 | `pnpm agent-workflows webhooks status`   | List recent webhook deliveries and failures per repo.                              |
 | `pnpm agent-workflows service install`   | Install the daemon as a launchd agent (macOS) or systemd user unit (Linux).        |
 | `pnpm agent-workflows service uninstall` | Stop and remove that service definition.                                           |
-| `pnpm test:unit`                         | Run fast unit tests.                                                               |
-| `pnpm test:integration`                  | Run local integration tests, including clean setup and temporary Git repositories. |
-| `pnpm test`                              | Run every Node test with exact 100% coverage for production TypeScript.            |
-| `pnpm test:smoke`                        | Exercise compiled CLI help routes without credentials or network access.           |
-| `pnpm lint`                              | Run ESLint across TypeScript and Node scripts.                                     |
-| `pnpm format:check`                      | Verify repository formatting with Prettier.                                        |
+| `mise run test:unit`                     | Run fast unit tests.                                                               |
+| `mise run test:integration`              | Run local integration tests, including clean setup and temporary Git repositories. |
+| `mise run test`                          | Run every Node test with exact 100% coverage for production TypeScript.            |
+| `mise run test:smoke`                    | Exercise compiled CLI help routes without credentials or network access.           |
+| `mise run lint`                          | Run ESLint across TypeScript and Node scripts.                                     |
+| `mise run format:check`                  | Verify repository formatting with Prettier.                                        |
 
 Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 `--no-adversarial` to override the configured review policy. See
@@ -120,7 +120,7 @@ Review targets can also be full GitHub PR URLs. Use `--adversarial` or
 
 The compiled production process remains terminal-friendly: logs stream live,
 `Ctrl+C` performs graceful shutdown, and child agent/Git processes behave the
-same as in development. Use `pnpm dev` when automatic restart after source
+same as in development. Use `mise run dev` when automatic restart after source
 edits is desired.
 
 ## Receiving webhooks
@@ -153,7 +153,7 @@ review automatically.
 ## Running in the background
 
 ```bash
-pnpm build
+mise run build
 pnpm agent-workflows service install
 pnpm agent-workflows service uninstall
 ```
@@ -252,21 +252,15 @@ Retention, retry, and binary override settings are documented in
 ## Development
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test:typecheck
-pnpm lint
-pnpm format:check
-pnpm build
-pnpm check:scripts
-pnpm test:unit
-pnpm test:integration
-pnpm test
-pnpm test:smoke
-pnpm run doctor
+mise run deps
+mise run gate       # typecheck, lint, format, scripts, tests, build, smoke, in parallel
+mise run doctor
 ```
 
-These are the authoritative local verification commands. `pnpm test` includes
+`mise tasks` lists every command; the gate's parts (`typecheck`,
+`typecheck:tests`, `lint`, `format:check`, `check:scripts`, `test`,
+`test:smoke`) can be run on their own. These are the authoritative local
+verification commands and CI runs the same tasks. `mise run test` includes
 every production TypeScript file under `src/` and fails below 100% for lines,
 branches, or functions. All test tiers use local servers, temporary Git
 repositories, and fake agent binaries, so they spend no model tokens and need no

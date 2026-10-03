@@ -18,7 +18,11 @@ if (!skipInstall) {
   run(packageManager, ["install", "--frozen-lockfile"]);
 }
 
-run(packageManager, ["run", "build"]);
+// Invoke the compiler directly: `pnpm exec` insists on re-checking the
+// modules directory, which needs a TTY and fails under the setup test.
+run(process.execPath, [
+  join(repoRoot, "node_modules", "typescript", "bin", "tsc"),
+]);
 
 const envPath = join(repoRoot, ".env");
 if (!existsSync(envPath)) {
@@ -31,7 +35,7 @@ if (!existsSync(envPath)) {
 }
 
 console.log(
-  "\nSetup complete. Edit .env, authenticate the selected agent CLI, install the pr-feedback and pr-reviewer skills from vstack into your harness, then run: pnpm run doctor",
+  "\nSetup complete. Edit .env, authenticate the selected agent CLI, install the pr-feedback and pr-reviewer skills from vstack into your harness, then run: mise run doctor",
 );
 
 function run(command, args) {

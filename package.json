@@ -10,23 +10,9 @@
   },
   "packageManager": "pnpm@11.15.0",
   "scripts": {
-    "setup": "node scripts/setup.mjs",
-    "doctor": "node scripts/doctor.mjs",
-    "check:scripts": "node --check scripts/setup.mjs && node --check scripts/doctor.mjs",
-    "dev": "tsx watch src/main.ts",
-    "build": "tsc",
     "start": "node --enable-source-maps dist/main.js",
     "agent-workflows": "node --enable-source-maps dist/main.js",
-    "review": "node --enable-source-maps dist/main.js review",
-    "test": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 \"tests/**/*.test.ts\"",
-    "test:unit": "node --import tsx --test \"tests/unit/*.test.ts\"",
-    "test:integration": "node --import tsx --test \"tests/integration/*.test.ts\"",
-    "test:smoke": "node dist/main.js --help && node dist/main.js help && node dist/main.js review --help && node dist/main.js webhooks --help && node dist/main.js service --help",
-    "typecheck": "tsc --noEmit",
-    "test:typecheck": "tsc --project tsconfig.tests.json",
-    "lint": "eslint src tests scripts eslint.config.js",
-    "format": "prettier --write src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs",
-    "format:check": "prettier --check src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs"
+    "review": "node --enable-source-maps dist/main.js review"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

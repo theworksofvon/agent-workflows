@@ -1,5 +1,6 @@
-# Toolchain for this checkout. `mise install` puts both on PATH at these
-# versions whenever you are inside the repo.
+# Toolchain, environment, and every developer command for this checkout.
+# `mise install` puts the tools on PATH; `mise tasks` lists the commands;
+# `mise run gate` is what CI runs.
 #
 # pnpm is pinned to the same release as package.json's `packageManager` so
 # the version mise provides is the one pnpm would enforce anyway; keep the
@@ -7,3 +8,85 @@
 [tools]
 node = "24"
 pnpm = "11.15.0"
+
+[env]
+# Local binaries (tsc, eslint, prettier, tsx) resolve without `pnpm exec`.
+_.path = ["{{config_root}}/node_modules/.bin"]
+# The daemon's own configuration, so one-off `node dist/main.js ...` calls in
+# this shell see it. Silently skipped when the file does not exist. The
+# daemon still loads .env itself: under launchd or systemd there is no shell.
+_.file = ".env"
+
+[tasks.deps]
+description = "Install locked dependencies"
+run = "pnpm install --frozen-lockfile"
+
+[tasks.setup]
+description = "Install, build, and create .env on a fresh clone"
+run = "node scripts/setup.mjs"
+
+[tasks.doctor]
+description = "Check this machine before starting the daemon"
+run = "node scripts/doctor.mjs"
+
+[tasks.build]
+description = "Compile TypeScript and source maps into dist/"
+run = "tsc"
+
+[tasks.dev]
+description = "Run the daemon from source with restart on change"
+run = "tsx watch src/main.ts"
+
+[tasks.typecheck]
+description = "Typecheck production sources"
+run = "tsc --noEmit"
+
+[tasks."typecheck:tests"]
+description = "Typecheck the test sources"
+run = "tsc --project tsconfig.tests.json"
+
+[tasks.lint]
+run = "eslint src tests scripts eslint.config.js"
+
+[tasks.format]
+description = "Rewrite files with Prettier"
+run = "prettier --write src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs"
+
+[tasks."format:check"]
+run = "prettier --check src tests scripts .github package.json tsconfig.json tsconfig.tests.json README.md docs"
+
+[tasks."check:scripts"]
+description = "Syntax-check the Node setup and doctor scripts"
+run = "node --check scripts/setup.mjs && node --check scripts/doctor.mjs"
+
+# Tests must not see the developer's .env: the logger reads LOG_LEVEL at
+# import time and the config tests manage their own variables.
+[tasks.test]
+description = "Every test with exact 100% coverage of src/"
+env = { LOG_LEVEL = false }
+run = 'node --import tsx --test --experimental-test-coverage --test-coverage-include="src/**/*.ts" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 "tests/**/*.test.ts"'
+
+[tasks."test:unit"]
+env = { LOG_LEVEL = false }
+run = 'node --import tsx --test "tests/unit/*.test.ts"'
+
+[tasks."test:integration"]
+env = { LOG_LEVEL = false }
+run = 'node --import tsx --test "tests/integration/*.test.ts"'
+
+[tasks."test:smoke"]
+description = "Exercise the compiled CLI help routes"
+depends = ["build"]
+run = "node dist/main.js --help && node dist/main.js help && node dist/main.js review --help && node dist/main.js webhooks --help && node dist/main.js service --help"
+
+[tasks.gate]
+description = "Everything CI checks; independent tasks run in parallel"
+depends = [
+  "typecheck",
+  "typecheck:tests",
+  "lint",
+  "format:check",
+  "check:scripts",
+  "test",
+  "test:smoke",
+]
