@@ -22,6 +22,14 @@ import { reviewPullRequest } from "./services/review-pr.js";
 import { receiveDelivery } from "./services/webhook.js";
 import { startWebhookListener } from "./adapters/http/listener.js";
 import type { ReviewRunResult } from "./services/review-pr.js";
+import { tailscaleCli } from "./adapters/tailscale/cli.js";
+import type { TailscalePort } from "./adapters/tailscale/tailscale.interface.js";
+import {
+  installWebhooks,
+  webhookStatus,
+  type InstallResult,
+  type StatusResult,
+} from "./services/webhooks-admin.js";
 
 export interface CliDependencies {
   loadConfig(options: { requireRepos: boolean }): Config;
@@ -41,6 +49,17 @@ export interface CliDependencies {
     state?: StateFactory;
   }): Pick<Daemon, "start" | "stop" | "dispatchEvents" | "idle">;
   reviewPullRequest: typeof reviewPullRequest;
+  tailscale: TailscalePort;
+  installWebhooks(args: {
+    config: Config;
+    github: GitHubClient;
+    publicUrl: string;
+  }): Promise<InstallResult[]>;
+  webhookStatus(args: {
+    config: Config;
+    github: GitHubClient;
+    publicUrl: string;
+  }): Promise<StatusResult[]>;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
   writeLine(line: string): void;
@@ -102,6 +121,9 @@ export const defaultCliDependencies: CliDependencies = {
     });
   },
   reviewPullRequest,
+  tailscale: tailscaleCli(),
+  installWebhooks,
+  webhookStatus,
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
   writeLine: console.log,
@@ -133,6 +155,10 @@ export async function runCli(
     await runReviewCommand(args.slice(1), dependencies);
     return;
   }
+  if (args[0] === "webhooks") {
+    await runWebhooksCommand(args.slice(1), dependencies);
+    return;
+  }
 
   const config = dependencies.loadConfig({ requireRepos: true });
   const client = dependencies.createClient(config.githubToken);
@@ -151,12 +177,87 @@ export async function runCli(
 
   const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });
-    void daemon.stop().finally(() => dependencies.exit(0));
+    void daemon
+      .stop()
+      .then(() => funnelOff(config, dependencies.tailscale))
+      .finally(() => dependencies.exit(0));
   };
   dependencies.onSignal("SIGINT", () => stop("SIGINT"));
   dependencies.onSignal("SIGTERM", () => stop("SIGTERM"));
 
+  if (config.tailscaleFunnel) {
+    const url = await dependencies.tailscale.funnelOn(config.port);
+    log.info("tailscale funnel on", { url });
+  }
   await daemon.start();
+}
+
+async function funnelOff(config: Config, tailscale: TailscalePort) {
+  if (!config.tailscaleFunnel) return;
+  try {
+    await tailscale.funnelOff(config.port);
+  } catch (err) {
+    log.error("tailscale funnel off failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export async function runWebhooksCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
+  const [command] = args;
+  if (command === "--help" || command === "-h" || command === "help") {
+    printHelp(dependencies.writeLine);
+    return;
+  }
+  if (command !== "install" && command !== "status") {
+    throw new Error(`Unknown webhooks command: ${command ?? ""}`);
+  }
+  const config = dependencies.loadConfig({ requireRepos: true });
+  const github = dependencies.createClient(config.githubToken);
+  // Install turns Funnel on because GitHub cannot reach the daemon without it.
+  const publicUrl =
+    config.publicUrl ??
+    (config.tailscaleFunnel
+      ? command === "install"
+        ? await dependencies.tailscale.funnelOn(config.port)
+        : await dependencies.tailscale.currentUrl()
+      : null);
+  if (publicUrl === null) {
+    throw new Error("Set PUBLIC_URL or TAILSCALE_FUNNEL=true to use webhooks.");
+  }
+
+  if (command === "install") {
+    const results = await dependencies.installWebhooks({
+      config,
+      github,
+      publicUrl,
+    });
+    for (const r of results) {
+      dependencies.writeLine(
+        `${r.action} ${r.repo.owner}/${r.repo.repo} -> ${r.url} (hook ${r.hookId})`,
+      );
+    }
+    return;
+  }
+  const results = await dependencies.webhookStatus({
+    config,
+    github,
+    publicUrl,
+  });
+  for (const r of results) {
+    const slug = `${r.repo.owner}/${r.repo.repo}`;
+    if (r.hookId === null) {
+      dependencies.writeLine(`${slug}: (no hook)`);
+      continue;
+    }
+    dependencies.writeLine(`${slug}: hook ${r.hookId} ${r.url}`);
+    for (const d of r.deliveries.slice(0, 10)) {
+      dependencies.writeLine(`  ${d.deliveredAt} ${d.event} ${d.statusCode}`);
+    }
+  }
 }
 
 export function printHelp(
@@ -167,10 +268,12 @@ export function printHelp(
 Usage:
   pnpm start
   pnpm review owner/repo#123 [--post] [--adversarial|--no-adversarial]
+  pnpm agent-workflows webhooks install|status
 
 Commands:
   daemon   Poll configured repositories and process ready comment batches (default)
   review   Run a read-only pull-request review; add --post to publish findings
+  webhooks Register (install) or inspect (status) the GitHub webhook on every watched repo
   help     Show this message`);
 }
 

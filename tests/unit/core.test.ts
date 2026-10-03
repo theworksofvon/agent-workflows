@@ -22,6 +22,7 @@ import {
   runCli,
   runEntryPoint,
   runReviewCommand,
+  runWebhooksCommand,
   type CliDependencies,
 } from "../../src/main.js";
 import type {
@@ -830,6 +831,47 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
       calls.push("reviewed");
       return reviewResult();
     },
+    tailscale: {
+      async funnelOn() {
+        calls.push("funnelOn");
+        return "https://box.ts.net";
+      },
+      async funnelOff() {
+        calls.push("funnelOff");
+      },
+      async currentUrl() {
+        calls.push("currentUrl");
+        return "https://box.ts.net";
+      },
+    },
+    installWebhooks: async ({ publicUrl }) => [
+      {
+        repo: { owner: "owner", repo: "repo" },
+        action: "created",
+        hookId: 123,
+        url: `${publicUrl}/webhooks/github`,
+      },
+    ],
+    webhookStatus: async ({ publicUrl }) => [
+      {
+        repo: { owner: "owner", repo: "repo" },
+        hookId: 5,
+        url: `${publicUrl}/webhooks/github`,
+        deliveries: Array.from({ length: 12 }, (_, i) => ({
+          id: i,
+          event: "issue_comment",
+          statusCode: 202,
+          deliveredAt: `2026-10-02T00:00:${String(i).padStart(2, "0")}Z`,
+          redelivery: false,
+        })),
+      },
+      {
+        repo: { owner: "owner", repo: "other" },
+        hookId: null,
+        url: "",
+        deliveries: [],
+      },
+    ],
     onSignal: (signal, listener) => {
       signals.set(signal, listener);
     },
@@ -1253,4 +1295,79 @@ test("review severity runtime contract exposes the parser's accepted values", as
     (await import("../../src/domain/decisions.js")).REVIEW_SEVERITIES,
     ["critical", "high", "medium", "low"],
   );
+});
+
+test("webhooks CLI resolves the public URL and prints install and status lines", async () => {
+  const withUrl = { ...makeConfig(), publicUrl: "https://hooks.example.com" };
+  const install = fakeCli({ loadConfig: () => withUrl });
+  await runCli(["webhooks", "install"], install.dependencies);
+  assert.deepEqual(install.lines, [
+    "created owner/repo -> https://hooks.example.com/webhooks/github (hook 123)",
+  ]);
+
+  const status = fakeCli({ loadConfig: () => withUrl });
+  await runCli(["webhooks", "status"], status.dependencies);
+  assert.equal(status.lines.length, 12);
+  assert.equal(
+    status.lines[0],
+    "owner/repo: hook 5 https://hooks.example.com/webhooks/github",
+  );
+  assert.equal(status.lines[1], "  2026-10-02T00:00:00Z issue_comment 202");
+  assert.equal(status.lines[11], "owner/other: (no hook)");
+
+  const funnel = { ...makeConfig(), tailscaleFunnel: true };
+  const viaInstall = fakeCli({ loadConfig: () => funnel });
+  await runWebhooksCommand(["install"], viaInstall.dependencies);
+  assert.ok(viaInstall.calls.includes("funnelOn"));
+  const viaStatus = fakeCli({ loadConfig: () => funnel });
+  await runWebhooksCommand(["status"], viaStatus.dependencies);
+  assert.ok(viaStatus.calls.includes("currentUrl"));
+  assert.ok(!viaStatus.calls.includes("funnelOn"));
+
+  const help = fakeCli();
+  await runCli(["webhooks", "--help"], help.dependencies);
+  assert.match(help.lines[0], /Usage:/);
+  assert.match(help.lines.join("\n"), /webhooks install\|status/);
+});
+
+test("webhooks CLI rejects unknown commands and missing exposure config", async () => {
+  await assert.rejects(
+    runCli(["webhooks", "bogus"], fakeCli().dependencies),
+    /Unknown webhooks command: bogus/,
+  );
+  await assert.rejects(
+    runCli(["webhooks"], fakeCli().dependencies),
+    /Unknown webhooks command: $/,
+  );
+  await assert.rejects(
+    runCli(["webhooks", "install"], fakeCli().dependencies),
+    /^Error: Set PUBLIC_URL or TAILSCALE_FUNNEL=true to use webhooks\.$/,
+  );
+});
+
+test("daemon turns Funnel on before start and off on shutdown, tolerating teardown errors", async () => {
+  const funnel = { ...makeConfig(), tailscaleFunnel: true };
+  const fake = fakeCli({ loadConfig: () => funnel });
+  await runCli([], fake.dependencies);
+  assert.deepEqual(fake.calls.slice(0, 2), ["funnelOn", "started"]);
+  fake.signals.get("SIGINT")?.();
+  await new Promise((done) => setImmediate(done));
+  assert.deepEqual(fake.calls.slice(-3), ["stopped", "funnelOff", "exit:0"]);
+
+  for (const thrown of [new Error("down"), "down"]) {
+    const failing = fakeCli({
+      loadConfig: () => funnel,
+      tailscale: {
+        funnelOn: async () => "https://box.ts.net",
+        funnelOff: async () => {
+          throw thrown;
+        },
+        currentUrl: async () => "",
+      },
+    });
+    await runCli([], failing.dependencies);
+    failing.signals.get("SIGTERM")?.();
+    await new Promise((done) => setImmediate(done));
+    assert.ok(failing.calls.includes("exit:0"));
+  }
 });
