@@ -97,10 +97,24 @@ test("systemd renders a user unit", () => {
   assert.equal(manager.name, "systemd");
   const unit = manager.render(spec);
   assert.match(unit, /\[Unit\]\nDescription=agent-workflows daemon/);
-  assert.match(unit, /ExecStart=\/usr\/bin\/node \/app\/dist\/main\.js/);
-  assert.match(unit, /WorkingDirectory=\/app/);
+  assert.match(unit, /ExecStart="\/usr\/bin\/node" "\/app\/dist\/main\.js"/);
+  assert.match(unit, /WorkingDirectory="\/app"/);
   assert.match(unit, /Restart=always\nRestartSec=5/);
   assert.match(unit, /\[Install\]\nWantedBy=default\.target/);
+});
+
+test("systemd quotes and escapes paths with spaces, percent, dollar, and quotes", () => {
+  const unit = serviceManagerFor("linux", harness().deps).render({
+    ...spec,
+    nodePath: "/my node/bin",
+    entryPath: '/a b/100%/$HOME/"x"\\y.js',
+    cwd: "/w d/%h/$x",
+  });
+  assert.match(
+    unit,
+    /^ExecStart="\/my node\/bin" "\/a b\/100%%\/\$\$HOME\/\\"x\\"\\\\y\.js"$/m,
+  );
+  assert.match(unit, /^WorkingDirectory="\/w d\/%%h\/\$x"$/m);
 });
 
 test("systemd install writes the unit then reloads, enables, and lingers", async () => {
@@ -110,10 +124,7 @@ test("systemd install writes the unit then reloads, enables, and lingers", async
   const expected = "/home/u/.config/systemd/user/agent-workflows.service";
   assert.equal(path, expected);
   assert.equal(manager.unitPath(spec), expected);
-  assert.deepEqual(events, [
-    "mkdir:/app/state/logs",
-    `write:${expected}:${manager.render(spec)}`,
-  ]);
+  assert.deepEqual(events, [`write:${expected}:${manager.render(spec)}`]);
   assert.deepEqual(commands, [
     ["systemctl", ["--user", "daemon-reload"]],
     ["systemctl", ["--user", "enable", "--now", "agent-workflows.service"]],

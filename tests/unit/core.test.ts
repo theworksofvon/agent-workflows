@@ -845,6 +845,7 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
         return "https://box.ts.net";
       },
     },
+    fileExists: () => true,
     serviceManager: {
       name: "systemd",
       unitPath: () => "/units/aw.service",
@@ -1438,6 +1439,8 @@ test("service CLI installs and uninstalls through the manager", async () => {
   );
   const remove = fakeCli();
   await runCli(["service", "uninstall"], remove.dependencies);
+  assert.ok(remove.calls.includes("config:false"));
+  assert.ok(install.calls.includes("config:false"));
   assert.deepEqual(remove.lines, ["Removed /units/aw.service"]);
   assert.ok(remove.calls.includes("service-uninstall"));
   const help = fakeCli();
@@ -1451,4 +1454,13 @@ test("service CLI installs and uninstalls through the manager", async () => {
     runCli(["service"], fakeCli().dependencies),
     /Unknown service command: $/,
   );
+});
+
+test("service install fails clearly when the compiled entry is missing", async () => {
+  const fake = fakeCli({ fileExists: () => false });
+  await assert.rejects(
+    runCli(["service", "install"], fake.dependencies),
+    /^Error: Build first: .*dist.main\.js does not exist \(run pnpm build\)\.$/,
+  );
+  assert.equal(fake.lines.length, 0);
 });

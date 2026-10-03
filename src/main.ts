@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
@@ -66,6 +67,7 @@ export interface CliDependencies {
     publicUrl: string;
   }): Promise<StatusResult[]>;
   serviceManager: ServiceManagerPort;
+  fileExists(path: string): boolean;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
   writeLine(line: string): void;
@@ -134,6 +136,7 @@ export const defaultCliDependencies: CliDependencies = {
   get serviceManager() {
     return serviceManagerFor(process.platform, defaultDeps());
   },
+  fileExists: existsSync,
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
   writeLine: console.log,
@@ -300,7 +303,7 @@ export async function runServiceCommand(
   if (command !== "install" && command !== "uninstall") {
     throw new Error(`Unknown service command: ${command ?? ""}`);
   }
-  const config = dependencies.loadConfig({ requireRepos: true });
+  const config = dependencies.loadConfig({ requireRepos: false });
   const spec: ServiceSpec = {
     label: "com.theworksofvon.agent-workflows",
     nodePath: process.execPath,
@@ -311,6 +314,11 @@ export async function runServiceCommand(
   };
   const manager = dependencies.serviceManager;
   if (command === "install") {
+    if (!dependencies.fileExists(spec.entryPath)) {
+      throw new Error(
+        `Build first: ${spec.entryPath} does not exist (run pnpm build).`,
+      );
+    }
     dependencies.writeLine(`Installed ${await manager.install(spec)}`);
     return;
   }

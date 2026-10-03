@@ -3,6 +3,15 @@ import type { ServiceDeps, ServiceManagerPort } from "./service.interface.js";
 
 const UNIT = "agent-workflows.service";
 
+// systemd splits on whitespace and expands % specifiers; ExecStart also expands $ variables.
+function quote(value: string, expandsVariables: boolean): string {
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("%", "%%");
+  return `"${expandsVariables ? escaped.replaceAll("$", "$$$$") : escaped}"`;
+}
+
 export function systemdManager(deps: ServiceDeps): ServiceManagerPort {
   const unitPath = () => join(deps.home, ".config", "systemd", "user", UNIT);
   const systemctl = (...args: string[]) =>
@@ -15,8 +24,8 @@ export function systemdManager(deps: ServiceDeps): ServiceManagerPort {
 Description=agent-workflows daemon
 
 [Service]
-ExecStart=${spec.nodePath} ${spec.entryPath}
-WorkingDirectory=${spec.cwd}
+ExecStart=${quote(spec.nodePath, true)} ${quote(spec.entryPath, true)}
+WorkingDirectory=${quote(spec.cwd, false)}
 Restart=always
 RestartSec=5
 
@@ -25,7 +34,6 @@ WantedBy=default.target
 `,
     async install(spec) {
       const path = unitPath();
-      deps.mkdir(spec.logDir);
       deps.writeFile(path, this.render(spec));
       await systemctl("daemon-reload");
       await systemctl("enable", "--now", UNIT);
