@@ -6,10 +6,15 @@ import { GitHubClient } from "./adapters/github/octokit.js";
 import { pollRepos } from "./services/poll.js";
 import { jsonFileState } from "./adapters/state/json-file.js";
 import { gitExec } from "./adapters/git/exec.js";
+import type { GitPort } from "./adapters/git/git.interface.js";
 import type { CommentBatch } from "./domain/events.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
 import { Daemon } from "./services/daemon.js";
+import {
+  handleFeedback,
+  type FeedbackPorts,
+} from "./services/handle-feedback.js";
 import { log } from "./log.js";
 import { parseReviewTarget } from "./domain/target.js";
 import { reviewPullRequest } from "./services/review-pr.js";
@@ -28,7 +33,9 @@ export interface CliDependencies {
     poll: () => Promise<CommentBatch[]>;
     client: GitHubClient;
     agent: AgentAdapter;
-  }): Pick<Daemon, "start" | "stop">;
+    git?: GitPort;
+  }): Pick<Daemon, "start" | "stop"> &
+    Partial<Pick<Daemon, "dispatchEvents" | "idle">>;
   reviewPullRequest: typeof reviewPullRequest;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
@@ -43,17 +50,37 @@ export const defaultCliDependencies: CliDependencies = {
     const state = jsonFileState(config);
     return () => pollRepos({ config, client, state });
   },
-  createDaemon: ({ config, poll, client, agent }) =>
-    new Daemon(
-      {
-        config,
-        agent,
-        git: gitExec,
-        github: client,
-        state: jsonFileState(config),
-      },
+  createDaemon: ({ config, poll, client, agent, git = gitExec }) => {
+    const state = jsonFileState(config);
+    const ports: FeedbackPorts = {
+      config,
+      agent,
+      git,
+      github: client,
+      state,
+    };
+    const adversarialAgent =
+      config.reviewAdversarialMode === "off"
+        ? undefined
+        : getAgent(config.reviewAdversarialAgent, config);
+    return new Daemon({
+      config,
       poll,
-    ),
+      handleBatch: (batch) => handleFeedback(batch, ports),
+      reviewPullRequest: (target) =>
+        reviewPullRequest({
+          config,
+          github: client,
+          git,
+          state,
+          agent,
+          adversarialAgent,
+          adversarialMode: config.reviewAdversarialMode,
+          target,
+          post: true,
+        }),
+    });
+  },
   reviewPullRequest,
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),

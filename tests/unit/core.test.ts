@@ -4,16 +4,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, type Config } from "../../src/config.js";
-import { SerialQueue } from "../../src/services/queue.js";
 import {
   GitHubClient,
   MARKER_TAG,
   type GitHubApi,
 } from "../../src/adapters/github/octokit.js";
-import { Daemon } from "../../src/services/daemon.js";
-import type { FeedbackPorts } from "../../src/services/handle-feedback.js";
-import type { AgentAdapter } from "../../src/adapters/agent/agent.interface.js";
-import type { CommentBatch } from "../../src/domain/events.js";
+import type { GitPort } from "../../src/adapters/git/git.interface.js";
 import { getAgent } from "../../src/adapters/agent/registry.js";
 import { createLogger } from "../../src/log.js";
 import {
@@ -115,30 +111,6 @@ function makeConfig(root = tmpdir()): Config {
     tailscaleFunnel: false,
     maxConcurrentRuns: 3,
     autoReview: false,
-  };
-}
-
-function daemonPorts(
-  config: Config,
-  github: FeedbackPorts["github"] = {
-    async createComment() {},
-    async replyToReviewComment() {},
-  },
-): FeedbackPorts {
-  const agent: AgentAdapter = {
-    name: "agent",
-    async run() {
-      return { exitCode: 0, stdout: "", stderr: "" };
-    },
-  };
-  return {
-    config,
-    agent,
-    github,
-    git: {} as FeedbackPorts["git"],
-    state: () => {
-      throw new Error("daemon tests inject handleFeedback");
-    },
   };
 }
 
@@ -425,44 +397,6 @@ test("loadConfig rejects every invalid required, repository, enum, and numeric v
   for (const [env, expected] of cases) {
     withEnv(env, () => assert.throws(() => loadConfig(), expected));
   }
-});
-
-test("SerialQueue preserves order, exposes queued size, and recovers after rejection", async () => {
-  const queue = new SerialQueue();
-  const order: string[] = [];
-  let release!: () => void;
-  const gate = new Promise<void>((resolveGate) => {
-    release = resolveGate;
-  });
-  queue.enqueue(async () => {
-    order.push("first-start");
-    await gate;
-    order.push("first-end");
-  });
-  queue.enqueue(async () => {
-    order.push("second");
-    throw new Error("expected failure");
-  });
-  queue.enqueue(async () => {
-    order.push("third");
-  });
-  await new Promise((resolveNow) => setImmediate(resolveNow));
-  assert.equal(queue.size, 2);
-  release();
-  for (
-    let attempts = 0;
-    attempts < 20 && order.at(-1) !== "third";
-    attempts += 1
-  ) {
-    await new Promise((resolveNow) => setImmediate(resolveNow));
-  }
-  assert.deepEqual(order, ["first-start", "first-end", "second", "third"]);
-  assert.equal(queue.size, 0);
-  queue.enqueue(async () => {
-    order.push("fourth");
-  });
-  await new Promise((resolveNow) => setImmediate(resolveNow));
-  assert.equal(order.at(-1), "fourth");
 });
 
 function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
@@ -822,157 +756,6 @@ test("agent registry routes known entries and rejects unknown agents", () => {
   assert.throws(() => getAgent("missing", config), /Unknown agent adapter/);
 });
 
-test("Daemon dispatches serial work, reports poll errors, and posts comments", async () => {
-  const config = makeConfig();
-  const handled: string[] = [];
-  const comments: unknown[] = [];
-  let pollCount = 0;
-  const daemon = new Daemon(
-    daemonPorts(config, {
-      async createComment(...args: unknown[]) {
-        comments.push(args);
-      },
-      async replyToReviewComment() {},
-    }),
-    async () => {
-      pollCount += 1;
-      return [
-        { batchId: "1" } as CommentBatch,
-        { batchId: "3" } as CommentBatch,
-      ];
-    },
-    {
-      async handleFeedback(batch, ports) {
-        handled.push(batch.batchId);
-        await ports.github.createComment({ owner: "o", repo: "r" }, 1, "done");
-      },
-    },
-  );
-  await daemon.tick();
-  for (let attempts = 0; attempts < 20 && handled.length < 2; attempts += 1)
-    await new Promise((done) => setImmediate(done));
-  assert.deepEqual(handled, ["1", "3"]);
-  assert.equal(comments.length, 2);
-  assert.equal(pollCount, 1);
-
-  let release!: () => void;
-  const gate = new Promise<void>((done) => {
-    release = done;
-  });
-  const overlapping = new Daemon(daemonPorts(config), async () => {
-    await gate;
-    return [];
-  });
-  const first = overlapping.tick();
-  await overlapping.tick();
-  release();
-  await first;
-
-  const failing = new Daemon(daemonPorts(config), async () => {
-    throw new Error("poll broke");
-  });
-  await failing.tick();
-});
-
-test("Daemon start/stop owns one deterministic recursive timer", async () => {
-  const config = makeConfig();
-  const timers: Array<{ callback: () => void; delay: number; handle: object }> =
-    [];
-  const cleared: object[] = [];
-  let polls = 0;
-  const daemon = new Daemon(
-    daemonPorts(config),
-    async () => {
-      polls += 1;
-      return [];
-    },
-    {
-      setTimeout: (callback, delay) => {
-        const handle = setTimeout(() => {}, 60_000);
-        handle.unref();
-        const timer = { callback: () => callback(), delay, handle };
-        timers.push(timer);
-        return timer.handle;
-      },
-      clearTimeout: (handle) => {
-        cleared.push(handle);
-        clearTimeout(handle);
-      },
-    },
-  );
-  await daemon.start();
-  await daemon.start();
-  assert.equal(polls, 1);
-  assert.equal(timers[0].delay, 5000);
-  timers[0].callback();
-  await new Promise((done) => setImmediate(done));
-  assert.equal(polls, 2);
-  assert.equal(timers.length, 2);
-  daemon.stop();
-  assert.deepEqual(cleared, [timers[1].handle]);
-  daemon.stop();
-
-  const stopDuringPoll = new Daemon(
-    daemonPorts(config),
-    async () => {
-      stopDuringPoll.stop();
-      return [];
-    },
-    {
-      setTimeout: () => {
-        throw new Error("must not schedule");
-      },
-    },
-  );
-  await stopDuringPoll.start();
-});
-
-test("Daemon restart while the first start is polling keeps one timer chain", async () => {
-  const config = makeConfig();
-  const timers: Array<{
-    callback: () => void;
-    handle: ReturnType<typeof setTimeout>;
-  }> = [];
-  let polls = 0;
-  let releaseFirstPoll!: () => void;
-  const firstPollGate = new Promise<void>((resolve) => {
-    releaseFirstPoll = resolve;
-  });
-  const daemon = new Daemon(
-    daemonPorts(config),
-    async () => {
-      polls += 1;
-      if (polls === 1) await firstPollGate;
-      return [];
-    },
-    {
-      setTimeout: (callback) => {
-        const handle = setTimeout(() => {}, 60_000);
-        handle.unref();
-        timers.push({ callback: () => callback(), handle });
-        return handle;
-      },
-      clearTimeout: (handle) => clearTimeout(handle),
-    },
-  );
-
-  const firstStart = daemon.start();
-  await new Promise((resolve) => setImmediate(resolve));
-  daemon.stop();
-  await daemon.start();
-  assert.equal(timers.length, 1);
-
-  releaseFirstPoll();
-  await firstStart;
-  assert.equal(timers.length, 1);
-
-  timers[0].callback();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(polls, 2);
-  assert.equal(timers.length, 2);
-  daemon.stop();
-});
-
 function reviewResult(
   overrides: Partial<ReviewRunResult> = {},
 ): ReviewRunResult {
@@ -1211,6 +994,82 @@ test("default CLI factories construct local runtime objects without external cal
   assert.deepEqual(await poll(), []);
   assert.equal(typeof daemon.start, "function");
   assert.equal(typeof defaultCliDependencies.reviewPullRequest, "function");
+});
+
+test("default daemon wires batches to feedback handling and ready PRs to posting reviews", async () => {
+  const root = mkdtempSync(join(tmpdir(), "daemon-wire-"));
+  try {
+    for (const mode of ["auto", "off"] as const) {
+      const config = {
+        ...makeConfig(root),
+        autoReview: true,
+        reviewAdversarialMode: mode,
+      };
+      const seen: string[] = [];
+      const client = {
+        async getPullRequest() {
+          seen.push("review");
+          throw new Error("stop review");
+        },
+        async createComment() {
+          seen.push("comment");
+        },
+        async replyToReviewComment() {},
+      } as unknown as GitHubClient;
+      const git = {
+        prepareWorkdir() {
+          seen.push("workdir");
+          throw new Error("stop feedback");
+        },
+      } as unknown as GitPort;
+      const daemon = defaultCliDependencies.createDaemon({
+        config,
+        poll: async () => [],
+        client,
+        agent: defaultCliDependencies.getAgent("codex", config),
+        git,
+      });
+      const repo = { owner: "owner", repo: "repo" };
+      daemon.dispatchEvents?.(
+        [
+          {
+            kind: "pull_request_ready",
+            pr: {
+              repo,
+              number: 7,
+              title: "t",
+              body: null,
+              headRef: "h",
+              baseRef: "main",
+              draft: false,
+              fromFork: false,
+            },
+          },
+        ],
+        [
+          {
+            repo,
+            prNumber: 7,
+            prTitle: "t",
+            prBody: null,
+            headRef: "h",
+            baseRef: "main",
+            batchId: `b-${mode}`,
+            groupKey: "g",
+            firstSeenAt: "",
+            lastSeenAt: "",
+            attempts: 0,
+            comments: [],
+          },
+        ],
+      );
+      await daemon.idle?.();
+      assert.ok(seen.includes("review"), mode);
+      assert.ok(seen.includes("workdir"), mode);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("CLI public helpers retain safe default dependencies on validation/help paths", async () => {

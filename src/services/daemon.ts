@@ -1,44 +1,45 @@
-import type { CommentBatch } from "../domain/events.js";
-import { SerialQueue } from "./queue.js";
-import { handleFeedback, type FeedbackPorts } from "./handle-feedback.js";
+import type { Config } from "../config.js";
+import type {
+  CommentBatch,
+  DomainEvent,
+  RepoRef,
+  ReviewTarget,
+} from "../domain/events.js";
+import { Dispatcher } from "./dispatch.js";
 import { log } from "../log.js";
 
-export interface DaemonDependencies {
-  queue?: SerialQueue;
-  handleFeedback?: (
-    batch: CommentBatch,
-    ports: FeedbackPorts,
-  ) => Promise<unknown>;
-  setTimeout?: (
-    callback: () => void,
-    delay: number,
-  ) => ReturnType<typeof setTimeout>;
-  clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
+export interface DaemonPorts {
+  config: Config;
+  poll: () => Promise<CommentBatch[]>;
+  handleBatch: (batch: CommentBatch) => Promise<unknown>;
+  reviewPullRequest?: (target: ReviewTarget) => Promise<unknown>;
+  dispatcher?: Dispatcher;
+  setTimeout?: typeof setTimeout;
+  clearTimeout?: typeof clearTimeout;
+}
+
+function laneFor(repo: RepoRef, prNumber: number): string {
+  return `${repo.owner}/${repo.repo}#${prNumber}`;
 }
 
 /**
- * The daemon: owns the poll loop, the serial queue, and dispatches comment
- * batches to feedback handling with the ports it was constructed with.
+ * The daemon: owns the poll loop and hands work to the dispatcher, which
+ * keeps each PR serial and caps total concurrency.
  */
 export class Daemon {
-  private readonly queue: SerialQueue;
-  private readonly handle: NonNullable<DaemonDependencies["handleFeedback"]>;
-  private readonly setTimer: NonNullable<DaemonDependencies["setTimeout"]>;
-  private readonly clearTimer: NonNullable<DaemonDependencies["clearTimeout"]>;
+  private readonly dispatcher: Dispatcher;
+  private readonly setTimer: typeof setTimeout;
+  private readonly clearTimer: typeof clearTimeout;
   private polling = false;
   private running = false;
   private lifecycleGeneration = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(
-    private readonly ports: FeedbackPorts,
-    private readonly poll: () => Promise<CommentBatch[]>,
-    dependencies: DaemonDependencies = {},
-  ) {
-    this.queue = dependencies.queue ?? new SerialQueue();
-    this.handle = dependencies.handleFeedback ?? handleFeedback;
-    this.setTimer = dependencies.setTimeout ?? setTimeout;
-    this.clearTimer = dependencies.clearTimeout ?? clearTimeout;
+  constructor(private readonly ports: DaemonPorts) {
+    this.dispatcher =
+      ports.dispatcher ?? new Dispatcher(ports.config.maxConcurrentRuns);
+    this.setTimer = ports.setTimeout ?? setTimeout;
+    this.clearTimer = ports.clearTimeout ?? clearTimeout;
   }
 
   async start(): Promise<void> {
@@ -46,7 +47,6 @@ export class Daemon {
     this.running = true;
     const generation = ++this.lifecycleGeneration;
     log.info("daemon started", {
-      agent: this.ports.agent.name,
       pollIntervalSec: this.ports.config.pollIntervalSec,
     });
     // First poll immediately so you don't wait a full interval on launch.
@@ -84,16 +84,37 @@ export class Daemon {
     }
     this.polling = true;
     try {
-      const batches = await this.poll();
-      for (const batch of batches) {
-        this.queue.enqueue(async () => {
-          await this.handle(batch, this.ports);
-        });
-      }
+      this.dispatchEvents([], await this.ports.poll());
     } catch (err) {
       log.error("poll tick failed", { error: String(err) });
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Entry for webhook-sourced events; same lanes as polled batches. */
+  dispatchEvents(events: DomainEvent[], ready: CommentBatch[]): void {
+    const { config, reviewPullRequest, handleBatch } = this.ports;
+    if (config.autoReview && reviewPullRequest) {
+      for (const event of events) {
+        if (event.kind !== "pull_request_ready") continue;
+        const target = { repo: event.pr.repo, prNumber: event.pr.number };
+        this.dispatcher.enqueue(
+          laneFor(target.repo, target.prNumber),
+          async () => {
+            await reviewPullRequest(target);
+          },
+        );
+      }
+    }
+    for (const batch of ready) {
+      this.dispatcher.enqueue(laneFor(batch.repo, batch.prNumber), async () => {
+        await handleBatch(batch);
+      });
+    }
+  }
+
+  idle(): Promise<void> {
+    return this.dispatcher.idle();
   }
 }
