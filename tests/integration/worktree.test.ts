@@ -20,6 +20,7 @@ import {
   pushBranch,
   resolveCloneUrl,
 } from "../../src/adapters/git/exec.js";
+import { PushRejectedError } from "../../src/domain/errors.js";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -119,7 +120,10 @@ test("pushBranch rejects when the remote branch moved after worktree creation", 
     );
     assert.throws(
       () => pushBranch(handle.path, "main", handle.baseSha),
-      /Command failed: git push/,
+      (err: unknown) =>
+        err instanceof PushRejectedError &&
+        err.branch === "main" &&
+        /Command failed: git push/.test(String((err.cause as Error).message)),
     );
 
     cleanupWorkdir(handle, false);
@@ -259,6 +263,36 @@ test("commitsAhead falls back to worktree status when the origin branch is absen
     assert.equal(commitsAhead(root, "missing"), 1);
     assert.equal(commitUncommittedChanges(root, "commit dirty"), true);
     assert.equal(commitUncommittedChanges(root, "nothing"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pushBranch rethrows push failures that are not a lease rejection unchanged", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-worktree-gone-"));
+  try {
+    const remote = createBareRemote(root);
+    const handle = prepareWorkdir({
+      stateDir: join(root, "state"),
+      repo: { owner: "local-owner", repo: "sample-repo" },
+      branch: "main",
+      taskId: "batch/gone",
+      token: "unused",
+      cloneUrlOverride: remote,
+    });
+    writeFileSync(join(handle.path, "agent-output.txt"), "done\n");
+    commitUncommittedChanges(handle.path, "Address PR #1 review comments");
+    git(
+      ["remote", "set-url", "origin", join(root, "missing.git")],
+      handle.path,
+    );
+    assert.throws(
+      () => pushBranch(handle.path, "main", handle.baseSha),
+      (err: unknown) =>
+        !(err instanceof PushRejectedError) &&
+        /Command failed: git push/.test(String((err as Error).message)),
+    );
+    cleanupWorkdir(handle, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

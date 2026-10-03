@@ -8,7 +8,10 @@ import {
 import { join } from "node:path";
 import type { Config } from "../config.js";
 import type { BatchHistory, Comment, CommentBatch } from "../domain/events.js";
-import type { AgentAdapter } from "../adapters/agent/agent.interface.js";
+import type {
+  AgentAdapter,
+  AgentRunResult,
+} from "../adapters/agent/agent.interface.js";
 import type { GitPort, WorkdirHandle } from "../adapters/git/git.interface.js";
 import type { GitHubPort } from "../adapters/github/github.interface.js";
 import type { StateFactory } from "../adapters/state/state.interface.js";
@@ -18,7 +21,7 @@ import {
   parseAgentReport,
   type AgentReport,
 } from "../domain/decisions.js";
-import { ReportMissingError } from "../domain/errors.js";
+import { PushRejectedError, ReportMissingError } from "../domain/errors.js";
 import { log } from "../log.js";
 
 export interface FeedbackPorts {
@@ -42,6 +45,7 @@ export type FeedbackOutcome =
   | { kind: "no-changes"; report: AgentReport }
   | { kind: "no-report" }
   | { kind: "lease-rejected"; report: AgentReport }
+  | { kind: "push-failed"; report: AgentReport }
   | { kind: "retry-scheduled"; retryAfterMs: number };
 
 export interface FeedbackPacket {
@@ -94,68 +98,65 @@ export async function handleFeedback(
   const runDir = join(config.stateDir, "runs", safeTaskId);
   const packetPath = join(runDir, "packet.json");
   const reportPath = join(runDir, "report.json");
-  fs.mkdirSync(runDir, { recursive: true });
-  // A kept run dir from an earlier attempt must not satisfy this run's report.
-  fs.rmSync(reportPath, { force: true });
-
   const repoState = ports.state(repo);
-  const history = repoState.getRecentPrHistory(
-    prNumber,
-    config.prContextHistoryLimit,
-  );
-  fs.writeFileSync(
-    packetPath,
-    JSON.stringify(buildPacket(batch, history, reportPath), null, 2),
-  );
+  const canRetry = batch.attempts < config.agentMaxAttempts;
 
-  const workdir = git.prepareWorkdir({
-    stateDir: config.stateDir,
-    repo,
-    branch: headRef,
-    taskId: safeTaskId,
-    token: config.githubToken,
-  });
-
-  try {
-    const result = await runAgent(agent, {
-      workdir: workdir.path,
-      branch: headRef,
-      prompt: buildLaunchPrompt(packetPath, reportPath),
+  const pauseForRetry = (error: string): FeedbackOutcome => {
+    const retryAfterMs = now() + config.agentRetryDelaySec * 1000;
+    repoState.pauseBatchForRetry({ batch, retryAfterMs, error });
+    log.warn("paused batch for retry", {
+      slug,
+      batchId: batch.batchId,
+      attempts: batch.attempts,
+      retryAfter: new Date(retryAfterMs).toISOString(),
     });
+    return { kind: "retry-scheduled", retryAfterMs };
+  };
+  const post = (body: string): Promise<void> =>
+    bestEffort("summary comment", slug, () =>
+      github.createComment(repo, prNumber, body),
+    );
 
-    if (result.exitCode !== 0) {
-      const retryable = isRetryableAgentFailure(
-        result.stderr + "\n" + result.stdout,
-      );
-      log.warn("agent exited non-zero", {
-        slug,
-        exitCode: result.exitCode,
-        retryable,
+  let workdir: WorkdirHandle | undefined;
+  try {
+    fs.mkdirSync(runDir, { recursive: true });
+    // A kept run dir from an earlier attempt must not satisfy this run's report.
+    fs.rmSync(reportPath, { force: true });
+    const history = repoState.getRecentPrHistory(
+      prNumber,
+      config.prContextHistoryLimit,
+    );
+    fs.writeFileSync(
+      packetPath,
+      JSON.stringify(buildPacket(batch, history, reportPath), null, 2),
+    );
+    workdir = git.prepareWorkdir({
+      stateDir: config.stateDir,
+      repo,
+      branch: headRef,
+      taskId: safeTaskId,
+      token: config.githubToken,
+    });
+    const workdirPath = workdir.path;
+    const launch = async (prompt: string) => {
+      const result = await runAgent(agent, {
+        workdir: workdirPath,
+        branch: headRef,
+        prompt,
       });
-      if (retryable && batch.attempts < config.agentMaxAttempts) {
-        const retryAfterMs = now() + config.agentRetryDelaySec * 1000;
-        repoState.pauseBatchForRetry({
-          batch,
-          retryAfterMs,
-          error: result.stderr.slice(-1000) || result.stdout.slice(-1000),
-        });
-        log.warn("paused batch for retry", {
-          slug,
-          batchId: batch.batchId,
-          attempts: batch.attempts,
-          retryAfter: new Date(retryAfterMs).toISOString(),
-        });
-        return { kind: "retry-scheduled", retryAfterMs };
-      }
-    }
+      const failure = retryableFailure(result, slug);
+      return { result, retryError: canRetry ? failure : undefined };
+    };
+
+    const first = await launch(buildLaunchPrompt(packetPath, reportPath));
+    if (first.retryError !== undefined) return pauseForRetry(first.retryError);
+    const result = first.result;
 
     if (!fs.existsSync(reportPath)) {
       log.warn("agent report missing, relaunching once", { slug, reportPath });
-      await runAgent(agent, {
-        workdir: workdir.path,
-        branch: headRef,
-        prompt: buildMissingReportPrompt(reportPath),
-      });
+      const again = await launch(buildMissingReportPrompt(reportPath));
+      if (again.retryError !== undefined)
+        return pauseForRetry(again.retryError);
     }
     const report = readReport(
       fs,
@@ -177,12 +178,10 @@ export async function handleFeedback(
     };
 
     if (report === undefined) {
-      await github.createComment(
-        repo,
-        prNumber,
+      record("no report", 0);
+      await post(
         `${MARKER_TAG} Agent produced no usable report for ${describeBatch(batch)}; batch not applied.`,
       );
-      record("no report", 0);
       return { kind: "no-report" };
     }
 
@@ -196,17 +195,25 @@ export async function handleFeedback(
     }
     const ahead = git.commitsAhead(workdir.path, headRef);
 
-    if (ahead > 0 && !pushWithLease(git, workdir, headRef, slug)) {
-      await github.createComment(
-        repo,
-        prNumber,
+    const push = ahead > 0 ? pushWithLease(git, workdir, headRef, slug) : null;
+    if (push?.kind === "failed" && canRetry) return pauseForRetry(push.error);
+    if (push?.kind === "rejected") {
+      record(report.summary, 0);
+      await post(
         `${MARKER_TAG} Branch moved during the run; ${ahead} commit(s) discarded. ${report.summary}`,
       );
-      record(report.summary, 0);
       return { kind: "lease-rejected", report };
     }
+    if (push?.kind === "failed") {
+      record(report.summary, 0);
+      await post(
+        `${MARKER_TAG} Push failed after ${batch.attempts} attempts; ${ahead} commit(s) discarded. ${report.summary}`,
+      );
+      return { kind: "push-failed", report };
+    }
 
-    const notAddressed = await replyToDeclined(batch, report, github);
+    record(report.summary, ahead);
+    const notAddressed = await replyToDeclined(batch, report, github, slug);
     const counts = countDecisions(report);
     const sections = [
       `${MARKER_TAG} ${report.summary}`,
@@ -214,13 +221,12 @@ export async function handleFeedback(
     ];
     if (notAddressed.length > 0)
       sections.push(`Not addressed:\n${notAddressed.join("\n")}`);
-    await github.createComment(repo, prNumber, sections.join("\n\n"));
-    record(report.summary, ahead);
+    await post(sections.join("\n\n"));
     return ahead > 0
       ? { kind: "pushed", commits: ahead, report }
       : { kind: "no-changes", report };
   } finally {
-    git.cleanupWorkdir(workdir, config.keepWorkdirs);
+    if (workdir) git.cleanupWorkdir(workdir, config.keepWorkdirs);
     if (!config.keepWorkdirs)
       fs.rmSync(runDir, { recursive: true, force: true });
   }
@@ -277,21 +283,61 @@ function buildMissingReportPrompt(reportPath: string): string {
   return `Your report at ${reportPath} is missing. Write it now following the pr-feedback skill's report schema. Change nothing else.`;
 }
 
-/** Returns false when the remote branch moved and the lease rejected the push. */
+type PushResult =
+  { kind: "pushed" } | { kind: "rejected" } | { kind: "failed"; error: string };
+
+/** A lease rejection means the branch moved; anything else may be transient. */
 function pushWithLease(
   git: GitPort,
   workdir: WorkdirHandle,
   branch: string,
   slug: string,
-): boolean {
+): PushResult {
   try {
     git.pushBranch(workdir.path, branch, workdir.baseSha);
   } catch (err) {
-    log.warn("push rejected by lease", { slug, error: String(err) });
-    return false;
+    const rejected = err instanceof PushRejectedError;
+    log.warn(rejected ? "push rejected by lease" : "push failed", {
+      slug,
+      error: String(err),
+    });
+    return rejected
+      ? { kind: "rejected" }
+      : { kind: "failed", error: String(err).slice(-1000) };
   }
   log.info("pushed changes", { slug, branch });
-  return true;
+  return { kind: "pushed" };
+}
+
+/** Returns the error tail when a nonzero exit looks like a rate limit. */
+function retryableFailure(
+  result: AgentRunResult,
+  slug: string,
+): string | undefined {
+  if (result.exitCode === 0) return undefined;
+  const retryable = isRetryableAgentFailure(
+    result.stderr + "\n" + result.stdout,
+  );
+  log.warn("agent exited non-zero", {
+    slug,
+    exitCode: result.exitCode,
+    retryable,
+  });
+  if (!retryable) return undefined;
+  return result.stderr.slice(-1000) || result.stdout.slice(-1000);
+}
+
+/** GitHub output is reporting only; state is already recorded when it runs. */
+async function bestEffort(
+  what: string,
+  slug: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    log.warn(`failed to post ${what}`, { slug, error: String(err) });
+  }
 }
 
 /** Any unreadable or invalid report is treated as no report at all. */
@@ -320,6 +366,7 @@ async function replyToDeclined(
   batch: CommentBatch,
   report: AgentReport,
   github: FeedbackPorts["github"],
+  slug: string,
 ): Promise<string[]> {
   const byKey = new Map(batch.comments.map((c) => [c.key, c]));
   const lines: string[] = [];
@@ -328,11 +375,13 @@ async function replyToDeclined(
     const comment = byKey.get(decision.key)!;
     const label = decision.decision === "skipped" ? "Skipped" : "Needs a human";
     if (comment.kind === "review") {
-      await github.replyToReviewComment(
-        batch.repo,
-        batch.prNumber,
-        comment.id,
-        `${MARKER_TAG} **${label}:** ${decision.reason}`,
+      await bestEffort("thread reply", slug, () =>
+        github.replyToReviewComment(
+          batch.repo,
+          batch.prNumber,
+          comment.id,
+          `${MARKER_TAG} **${label}:** ${decision.reason}`,
+        ),
       );
     } else {
       lines.push(`- @${comment.author}: ${label}: ${decision.reason}`);

@@ -10,6 +10,15 @@ export class ReportMissingError extends DomainError {
   }
 }
 export class ReportInvalidError extends DomainError {}
+/** The remote branch moved since the worktree was fetched; the lease held. */
+export class PushRejectedError extends DomainError {
+  constructor(
+    public readonly branch: string,
+    options?: ErrorOptions,
+  ) {
+    super(`push of ${branch} rejected: remote branch moved`, options);
+  }
+}
 export class DraftPullRequestError extends DomainError {
   constructor(slug: string) {
     super(

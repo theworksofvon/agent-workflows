@@ -22,6 +22,7 @@ import type {
 import { GitHubRepoStateStore } from "../../src/adapters/state/json-file.js";
 import type { CommentBatch } from "../../src/domain/events.js";
 import { MARKER_TAG } from "../../src/domain/batching.js";
+import { PushRejectedError } from "../../src/domain/errors.js";
 import {
   buildLaunchPrompt,
   buildPacket,
@@ -100,14 +101,19 @@ function batch(): CommentBatch {
 
 interface Calls {
   pushes: number;
+  pushLeases: string[];
   comments: string[];
   replies: Array<{ id: number; body: string }>;
   cleanups: number;
 }
 
+function newCalls(): Calls {
+  return { pushes: 0, pushLeases: [], comments: [], replies: [], cleanups: 0 };
+}
+
 function fakeGit(
   root: string,
-  opts: { ahead?: number; pushThrows?: boolean } = {},
+  opts: { ahead?: number; pushError?: Error } = {},
   calls: Calls,
 ): GitPort {
   const handle: WorkdirHandle = {
@@ -126,8 +132,9 @@ function fakeGit(
     hasUncommittedChanges: () => false,
     commitUncommittedChanges: () => false,
     commitsAhead: () => opts.ahead ?? 0,
-    pushBranch: () => {
-      if (opts.pushThrows) throw new Error("lease rejected");
+    pushBranch: (_workdir, _branch, expectedRemoteSha) => {
+      calls.pushLeases.push(expectedRemoteSha);
+      if (opts.pushError) throw opts.pushError;
       calls.pushes += 1;
     },
   };
@@ -229,7 +236,7 @@ test("packet and prompt carry absolute paths and every comment", () => {
 
 test("valid report with commits pushes, replies on skipped review threads, and summarizes", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(fullReport);
     const outcome = await handleFeedback(
@@ -238,6 +245,7 @@ test("valid report with commits pushes, replies on skipped review threads, and s
     );
     assert.equal(outcome.kind, "pushed");
     assert.equal(calls.pushes, 1);
+    assert.deepEqual(calls.pushLeases, ["abc"]);
     assert.deepEqual(
       calls.replies.map((r) => r.id),
       [2],
@@ -269,7 +277,7 @@ test("valid report with commits pushes, replies on skipped review threads, and s
 
 test("needs_human on an issue comment lands in the summary, not a reply", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const report = {
       summary: "s",
@@ -287,6 +295,7 @@ test("needs_human on an issue comment lands in the summary, not a reply", async 
       ports(root, reportWritingAgent(report), fakeGit(root, {}, calls), calls),
     );
     assert.equal(outcome.kind, "no-changes");
+    assert.equal(calls.pushes, 0);
     assert.equal(calls.replies.length, 0);
     assert.match(
       calls.comments[0],
@@ -300,7 +309,7 @@ test("needs_human on an issue comment lands in the summary, not a reply", async 
 
 test("missing report triggers one relaunch and succeeds when the second run writes it", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(fullReport, { writeOnSecondRun: true });
     const outcome = await handleFeedback(
@@ -317,7 +326,7 @@ test("missing report triggers one relaunch and succeeds when the second run writ
 
 test("no report after relaunch posts a summary, pushes nothing, marks processed", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(null);
     const outcome = await handleFeedback(
@@ -340,7 +349,7 @@ test("no report after relaunch posts a summary, pushes nothing, marks processed"
 
 test("invalid report is treated as no report", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const outcome = await handleFeedback(
       batch(),
@@ -360,7 +369,7 @@ test("invalid report is treated as no report", async () => {
 
 test("rate-limited exit pauses the batch for retry", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(null, {
       exitCode: 1,
@@ -392,7 +401,7 @@ test("rate-limited exit pauses the batch for retry", async () => {
 
 test("rate-limited exit at max attempts falls through to the normal path", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(fullReport, {
       exitCode: 1,
@@ -410,14 +419,18 @@ test("rate-limited exit at max attempts falls through to the normal path", async
 
 test("rejected lease discards and explains", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const outcome = await handleFeedback(
       batch(),
       ports(
         root,
         reportWritingAgent(fullReport),
-        fakeGit(root, { ahead: 1, pushThrows: true }, calls),
+        fakeGit(
+          root,
+          { ahead: 1, pushError: new PushRejectedError("f") },
+          calls,
+        ),
         calls,
       ),
     );
@@ -434,7 +447,7 @@ test("rejected lease discards and explains", async () => {
 
 test("keepWorkdirs preserves the run directory", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const p = ports(
       root,
@@ -489,7 +502,7 @@ test("packet carries the PR body, history, and only inline fields for review com
 
 test("retry delay comes from the injected clock and keeps the agent's error tail", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent: AgentAdapter = {
       name: "fake",
@@ -524,14 +537,19 @@ test("retry delay comes from the injected clock and keeps the agent's error tail
 test("history records zero commits when no report or a rejected lease leaves nothing pushed", async () => {
   for (const scenario of ["no-report", "lease-rejected"] as const) {
     const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-    const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+    const calls: Calls = newCalls();
     try {
       const agent = reportWritingAgent(
         scenario === "no-report" ? null : fullReport,
       );
       const git = fakeGit(
         root,
-        { ahead: 2, pushThrows: scenario === "lease-rejected" },
+        {
+          ahead: 2,
+          ...(scenario === "lease-rejected"
+            ? { pushError: new PushRejectedError("f") }
+            : {}),
+        },
         calls,
       );
       const outcome = await handleFeedback(
@@ -559,7 +577,7 @@ test("history records zero commits when no report or a rejected lease leaves not
 
 test("non-retryable failure without a report is not retried and posts the no-report summary", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const agent = reportWritingAgent(null, {
       exitCode: 2,
@@ -591,7 +609,7 @@ test("non-retryable failure without a report is not retried and posts the no-rep
 
 test("a report left by an earlier kept run is not mistaken for this run's report", async () => {
   const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
-  const calls: Calls = { pushes: 0, comments: [], replies: [], cleanups: 0 };
+  const calls: Calls = newCalls();
   try {
     const runDir = join(root, "state", "runs", "batch_o_r_pr_4_conversation_1");
     mkdirSync(runDir, { recursive: true });
@@ -603,6 +621,181 @@ test("a report left by an earlier kept run is not mistaken for this run's report
     );
     assert.equal(outcome.kind, "no-report");
     assert.equal(calls.pushes, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-lease push failure is retried while attempts remain", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const outcome = await handleFeedback(batch(), {
+      ...ports(
+        root,
+        reportWritingAgent(fullReport),
+        fakeGit(root, { ahead: 1, pushError: new Error("network") }, calls),
+        calls,
+      ),
+      now: () => 10_000,
+    });
+    assert.deepEqual(outcome, {
+      kind: "retry-scheduled",
+      retryAfterMs: 12_000,
+    });
+    assert.equal(calls.comments.length, 0);
+    assert.equal(calls.replies.length, 0);
+    const state = GitHubRepoStateStore.fromConfig(config(root), {
+      owner: "o",
+      repo: "r",
+    });
+    assert.equal(state.hasProcessedComment("o/r#4:issue:1"), false);
+    assert.deepEqual(state.getRecentPrHistory(4, 5), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-lease push failure at max attempts posts push-failed and marks processed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const outcome = await handleFeedback(
+      { ...batch(), attempts: 3 },
+      ports(
+        root,
+        reportWritingAgent(fullReport),
+        fakeGit(root, { ahead: 1, pushError: new Error("network") }, calls),
+        calls,
+      ),
+    );
+    assert.equal(outcome.kind, "push-failed");
+    assert.equal(
+      calls.comments[0],
+      `${MARKER_TAG} Push failed after 3 attempts; 1 commit(s) discarded. ${fullReport.summary}`,
+    );
+    assert.equal(calls.replies.length, 0);
+    const state = GitHubRepoStateStore.fromConfig(config(root), {
+      owner: "o",
+      repo: "r",
+    });
+    assert.equal(state.hasProcessedComment("o/r#4:review:2"), true);
+    assert.equal(state.getRecentPrHistory(4, 5)[0].commitCount, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GitHub failures after a push are logged; state already records the push", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const p = ports(
+      root,
+      reportWritingAgent(fullReport),
+      fakeGit(root, { ahead: 2 }, calls),
+      calls,
+    );
+    p.github = {
+      async createComment() {
+        throw new Error("github down");
+      },
+      async replyToReviewComment() {
+        throw new Error("github down");
+      },
+    };
+    const outcome = await handleFeedback(batch(), p);
+    assert.equal(outcome.kind, "pushed");
+    assert.equal(calls.pushes, 1);
+    const state = GitHubRepoStateStore.fromConfig(config(root), {
+      owner: "o",
+      repo: "r",
+    });
+    assert.equal(state.hasProcessedComment("o/r#4:issue:1"), true);
+    assert.equal(state.getRecentPrHistory(4, 5)[0].commitCount, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a prepareWorkdir failure propagates and still removes the run directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const git = fakeGit(root, {}, calls);
+    git.prepareWorkdir = () => {
+      throw new Error("clone failed");
+    };
+    await assert.rejects(
+      handleFeedback(
+        batch(),
+        ports(root, reportWritingAgent(fullReport), git, calls),
+      ),
+      /clone failed/,
+    );
+    assert.equal(calls.cleanups, 0);
+    assert.equal(
+      existsSync(join(root, "state", "runs", "batch_o_r_pr_4_conversation_1")),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a rate-limited relaunch pauses the batch for retry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const prompts: string[] = [];
+    const agent: AgentAdapter = {
+      name: "fake",
+      async run(input) {
+        prompts.push(input.prompt);
+        return prompts.length === 1
+          ? { exitCode: 0, stdout: "", stderr: "" }
+          : { exitCode: 1, stdout: "", stderr: "usage limit reached" };
+      },
+    };
+    const outcome = await handleFeedback(
+      batch(),
+      ports(root, agent, fakeGit(root, { ahead: 1 }, calls), calls),
+    );
+    assert.equal(outcome.kind, "retry-scheduled");
+    assert.equal(prompts.length, 2);
+    assert.equal(calls.comments.length, 0);
+    assert.equal(calls.pushes, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("needs_human on a review comment replies on its thread", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-hf-"));
+  const calls = newCalls();
+  try {
+    const report = {
+      summary: "s",
+      comments: [
+        { key: "o/r#4:issue:1", decision: "addressed" },
+        {
+          key: "o/r#4:review:2",
+          decision: "needs_human",
+          reason: "conflicts with the design",
+        },
+      ],
+    };
+    await handleFeedback(
+      batch(),
+      ports(root, reportWritingAgent(report), fakeGit(root, {}, calls), calls),
+    );
+    assert.deepEqual(calls.replies, [
+      {
+        id: 2,
+        body: `${MARKER_TAG} **Needs a human:** conflicts with the design`,
+      },
+    ]);
+    assert.doesNotMatch(calls.comments[0], /Not addressed/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

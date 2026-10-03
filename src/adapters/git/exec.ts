@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path, { join, resolve } from "node:path";
+import { PushRejectedError } from "../../domain/errors.js";
 import { log } from "../../log.js";
 import type { GitPort, WorkdirHandle } from "./git.interface.js";
 
@@ -217,7 +218,9 @@ export function commitUncommittedChanges(
 }
 
 /**
- * Push the branch back to origin. Uses force-with-lease to be safe against
+ * Push the branch back to origin. Throws PushRejectedError when the lease or
+ * fast-forward check rejects it; any other failure is rethrown unchanged.
+ * Uses force-with-lease to be safe against
  * a teammate pushing in between our fetch and push.
  */
 export function pushBranch(
@@ -227,16 +230,25 @@ export function pushBranch(
 ): void {
   const remoteRef = `refs/heads/${branch}`;
   log.info("pushing branch to origin", { branch, expectedRemoteSha });
-  git(
-    [
-      "push",
-      `--force-with-lease=${remoteRef}:${expectedRemoteSha}`,
-      "origin",
-      `HEAD:${remoteRef}`,
-    ],
-    { cwd: workdir },
-  );
+  try {
+    git(
+      [
+        "push",
+        `--force-with-lease=${remoteRef}:${expectedRemoteSha}`,
+        "origin",
+        `HEAD:${remoteRef}`,
+      ],
+      { cwd: workdir },
+    );
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr);
+    if (PUSH_REJECTED.test(stderr))
+      throw new PushRejectedError(branch, { cause: err });
+    throw err;
+  }
 }
+
+const PUSH_REJECTED = /stale info|\[rejected\]|fetch first|non-fast-forward/i;
 
 export const gitExec: GitPort = {
   prepareWorkdir,
