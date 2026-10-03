@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Agentic, Event-Driven Restructure
+
+Date: 2026-10-02 CDT; Status: Completed; PR: #7 on `feat/agentic-restructure`.
+Task: Keep every deterministic step in code and hand every judgment call to the agent, with GitHub webhooks as the primary event source.
+Message: The daemon is now ports and adapters; the agent receives a packet, decides per comment, and must write a report that code turns into pushes, thread replies, and a summary.
+Added/Changed: `domain/`, `services/`, `adapters/` layout; mandatory agent report with per-comment `addressed`, `skipped`, `needs_human`; webhook listener with HMAC verification and delivery dedupe; polling demoted to 300-second reconciliation; per-PR dispatch lanes with `MAX_CONCURRENT_RUNS`; `AUTO_REVIEW`; `ALLOWED_AUTHORS`; `PUBLIC_URL` and `TAILSCALE_FUNNEL` exposure; `webhooks install|status`; `service install|uninstall`.
+Fixed/Removed: Removed bundled `skills/`, the skill installer, doctor skill-link checks, and the Python test job; the `pr-feedback` skill lives in vstack. A missing report no longer lets uncommitted agent work be pushed.
+Handoff: Before restarting against existing state, move `state/github/EK-LABS-LLC/pluto-predicts.json` aside so cursors re-establish, and set `ALLOWED_AUTHORS` or trim `REPOS` for public repositories.
+
 ### Narrow Supported CI Platforms
 
 Date: 2026-07-19 CDT; Status: Completed; PR: Pending on `agent/drop-windows-ci`.

@@ -32,7 +32,7 @@ pnpm review owner/repo#123 --no-adversarial
 - Fetches the PR title, body, branch info, and changed files.
 - Creates an isolated worktree for the PR branch.
 - Runs the configured `AGENT` (`zcode`, `claude-code`, `codex`, etc.).
-- Embeds the repo-local `skills/pr-reviewer` contract for consistent behavior across adapters.
+- Launches the agent with the `pr-reviewer` skill from vstack and reads the findings from a report file the agent writes.
 - In `auto` mode, runs a fresh adversarial reviewer for large or sensitive diffs and high-severity primary findings.
 - Asks for actionable review findings only.
 - Prints findings locally by default.
@@ -44,7 +44,7 @@ pnpm review owner/repo#123 --no-adversarial
 - Refuses to run on draft PRs.
 - Refuses to post if the agent edits files.
 - Refuses to post if the agent exits nonzero.
-- Refuses to post if the agent output is not valid review JSON.
+- Refuses to post if the agent's report file is missing after one relaunch or is not valid review JSON.
 - Skips duplicate findings already posted for the same PR.
 - Skips findings whose path or line cannot be attached to the PR diff.
 
