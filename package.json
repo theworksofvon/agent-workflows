@@ -22,7 +22,7 @@
     "test": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 \"tests/**/*.test.ts\"",
     "test:unit": "node --import tsx --test \"tests/unit/*.test.ts\"",
     "test:integration": "node --import tsx --test \"tests/integration/*.test.ts\"",
-    "test:smoke": "node dist/main.js --help && node dist/main.js help && node dist/main.js review --help && node dist/main.js webhooks --help",
+    "test:smoke": "node dist/main.js --help && node dist/main.js help && node dist/main.js review --help && node dist/main.js webhooks --help && node dist/main.js service --help",
     "test:python": "python3 -m unittest discover -s skills/model-orchestrator/tests -p 'test_*.py'",
     "typecheck": "tsc --noEmit",
     "test:typecheck": "tsc --project tsconfig.tests.json",

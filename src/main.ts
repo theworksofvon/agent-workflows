@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./adapters/github/octokit.js";
@@ -24,6 +24,11 @@ import { startWebhookListener } from "./adapters/http/listener.js";
 import type { ReviewRunResult } from "./services/review-pr.js";
 import { tailscaleCli } from "./adapters/tailscale/cli.js";
 import type { TailscalePort } from "./adapters/tailscale/tailscale.interface.js";
+import { defaultDeps, serviceManagerFor } from "./adapters/service/index.js";
+import type {
+  ServiceManagerPort,
+  ServiceSpec,
+} from "./adapters/service/service.interface.js";
 import {
   installWebhooks,
   webhookStatus,
@@ -60,6 +65,7 @@ export interface CliDependencies {
     github: GitHubClient;
     publicUrl: string;
   }): Promise<StatusResult[]>;
+  serviceManager: ServiceManagerPort;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
   writeLine(line: string): void;
@@ -124,6 +130,10 @@ export const defaultCliDependencies: CliDependencies = {
   tailscale: tailscaleCli(),
   installWebhooks,
   webhookStatus,
+  // Lazy so unsupported platforms only fail when `service` is actually used.
+  get serviceManager() {
+    return serviceManagerFor(process.platform, defaultDeps());
+  },
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
   writeLine: console.log,
@@ -157,6 +167,10 @@ export async function runCli(
   }
   if (args[0] === "webhooks") {
     await runWebhooksCommand(args.slice(1), dependencies);
+    return;
+  }
+  if (args[0] === "service") {
+    await runServiceCommand(args.slice(1), dependencies);
     return;
   }
 
@@ -274,6 +288,36 @@ export async function runWebhooksCommand(
   }
 }
 
+export async function runServiceCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
+  const [command] = args;
+  if (command === "--help" || command === "-h" || command === "help") {
+    printHelp(dependencies.writeLine);
+    return;
+  }
+  if (command !== "install" && command !== "uninstall") {
+    throw new Error(`Unknown service command: ${command ?? ""}`);
+  }
+  const config = dependencies.loadConfig({ requireRepos: true });
+  const spec: ServiceSpec = {
+    label: "com.theworksofvon.agent-workflows",
+    nodePath: process.execPath,
+    // Resolves to dist/main.js from both dist/ and src/, so the unit never points at TypeScript.
+    entryPath: fileURLToPath(new URL("../dist/main.js", import.meta.url)),
+    cwd: process.cwd(),
+    logDir: join(config.stateDir, "logs"),
+  };
+  const manager = dependencies.serviceManager;
+  if (command === "install") {
+    dependencies.writeLine(`Installed ${await manager.install(spec)}`);
+    return;
+  }
+  await manager.uninstall(spec);
+  dependencies.writeLine(`Removed ${manager.unitPath(spec)}`);
+}
+
 export function printHelp(
   writeLine: (line: string) => void = console.log,
 ): void {
@@ -283,11 +327,13 @@ Usage:
   pnpm start
   pnpm review owner/repo#123 [--post] [--adversarial|--no-adversarial]
   pnpm agent-workflows webhooks install|status
+  pnpm agent-workflows service install|uninstall
 
 Commands:
   daemon   Poll configured repositories and process ready comment batches (default)
   review   Run a read-only pull-request review; add --post to publish findings
   webhooks Register (install) or inspect (status) the GitHub webhook on every watched repo
+  service  Install or remove the daemon as a launchd agent (macOS) or systemd user unit (Linux)
   help     Show this message`);
 }
 

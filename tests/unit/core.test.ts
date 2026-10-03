@@ -25,6 +25,7 @@ import {
   runWebhooksCommand,
   type CliDependencies,
 } from "../../src/main.js";
+import type { ServiceManagerPort } from "../../src/adapters/service/service.interface.js";
 import type {
   ReviewRunResult,
   ReviewOptions,
@@ -844,6 +845,20 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
         return "https://box.ts.net";
       },
     },
+    serviceManager: {
+      name: "systemd",
+      unitPath: () => "/units/aw.service",
+      render: () => "",
+      async install(spec) {
+        calls.push(
+          `service-install:${spec.label}:${spec.entryPath}:${spec.logDir}`,
+        );
+        return "/units/aw.service";
+      },
+      async uninstall() {
+        calls.push("service-uninstall");
+      },
+    } satisfies ServiceManagerPort,
     installWebhooks: async ({ publicUrl }) => [
       {
         repo: { owner: "owner", repo: "repo" },
@@ -1061,6 +1076,10 @@ test("default CLI factories construct local runtime objects without external cal
   assert.deepEqual(await poll(), []);
   assert.equal(typeof daemon.start, "function");
   assert.equal(typeof defaultCliDependencies.reviewPullRequest, "function");
+  assert.match(
+    defaultCliDependencies.serviceManager.name,
+    /^(launchd|systemd)$/,
+  );
 });
 
 test("default daemon wires batches to feedback handling and ready PRs to posting reviews", async () => {
@@ -1407,4 +1426,29 @@ test("Funnel is released when stop fails or when startup fails after funnelOn", 
   });
   await assert.rejects(runCli([], startFails.dependencies), /status failed/);
   assert.deepEqual(startFails.calls, ["funnelOff"]);
+});
+
+test("service CLI installs and uninstalls through the manager", async () => {
+  const install = fakeCli();
+  await runCli(["service", "install"], install.dependencies);
+  assert.deepEqual(install.lines, ["Installed /units/aw.service"]);
+  assert.match(
+    install.calls.join("\n"),
+    /service-install:com\.theworksofvon\.agent-workflows:.*dist.main\.js:.*logs/,
+  );
+  const remove = fakeCli();
+  await runCli(["service", "uninstall"], remove.dependencies);
+  assert.deepEqual(remove.lines, ["Removed /units/aw.service"]);
+  assert.ok(remove.calls.includes("service-uninstall"));
+  const help = fakeCli();
+  await runCli(["service", "--help"], help.dependencies);
+  assert.match(help.lines.join("\n"), /service install\|uninstall/);
+  await assert.rejects(
+    runCli(["service", "bogus"], fakeCli().dependencies),
+    /Unknown service command: bogus/,
+  );
+  await assert.rejects(
+    runCli(["service"], fakeCli().dependencies),
+    /Unknown service command: $/,
+  );
 });
