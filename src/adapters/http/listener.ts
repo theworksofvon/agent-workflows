@@ -28,11 +28,12 @@ export function startWebhookListener(args: {
   onDelivery: DeliveryHandler;
 }): Promise<ListenerHandle> {
   const server = createServer((req, res) => {
-    // A server-side request always carries a URL; the typing is shared with clients.
-    const url = new URL(String(req.url), "http://localhost");
-    if (req.method === "GET" && url.pathname === "/healthz")
+    // Split rather than `new URL`: a target like `//[` throws there and would
+    // escape as an uncaught exception. A server request always has a URL.
+    const path = String(req.url).split("?")[0];
+    if (req.method === "GET" && path === "/healthz")
       return send(res, 200, { ok: true });
-    if (req.method !== "POST" || url.pathname !== "/webhooks/github")
+    if (req.method !== "POST" || path !== "/webhooks/github")
       return send(res, 404, { reason: "not-found" });
     receive(req, res, args.onDelivery);
   });
@@ -43,7 +44,12 @@ export function startWebhookListener(args: {
       const { port } = server.address() as AddressInfo;
       resolve({
         url: `http://${args.host}:${port}`,
-        close: () => new Promise((done) => server.close(() => done())),
+        close: () =>
+          new Promise((done) => {
+            server.close(() => done());
+            // Open or keep-alive connections must not hold up shutdown.
+            server.closeAllConnections();
+          }),
       });
     });
   });

@@ -1116,6 +1116,8 @@ test("default daemon serves webhooks only when a public route is configured, thr
         ...makeConfig(root),
         webhookSecret: "s",
         port: 0,
+        // No ready batch, so feedback handling never opens state on its own.
+        allowedAuthors: ["someone-else"],
         ...over,
       };
       const opened: RepoRef[] = [];
@@ -1177,8 +1179,9 @@ test("default daemon serves webhooks only when a public route is configured, thr
         });
         assert.equal(res.status, 202);
         assert.deepEqual(await res.json(), { reason: "accepted" });
+        assert.deepEqual(opened, [{ owner: "owner", repo: "repo" }]);
         await daemon.idle();
-        assert.deepEqual(opened[0], { owner: "owner", repo: "repo" });
+        assert.equal(opened.length, 1);
       } finally {
         await daemon.stop();
       }
