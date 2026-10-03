@@ -24,7 +24,7 @@ test("funnelOn enables funnel then derives the https URL from status", async () 
   assert.equal(url, "https://box.tailnet.ts.net");
   assert.deepEqual(fake.calls, [
     ["funnel", "--bg", "3773"],
-    ["status", "--json"],
+    ["status", "--json", "--peers=false"],
   ]);
 });
 
@@ -55,7 +55,9 @@ test("funnelOn fails on a non-zero funnel exit and on a missing DNSName", async 
 
 test("a missing binary is reported as not installed", async () => {
   const run = async (): Promise<Reply> => {
-    throw new Error("spawn tailscale ENOENT");
+    throw Object.assign(new Error("spawn tailscale ENOENT"), {
+      code: "ENOENT",
+    });
   };
   await assert.rejects(
     tailscaleCli(run).funnelOn(1),
@@ -65,7 +67,16 @@ test("a missing binary is reported as not installed", async () => {
     tailscaleCli(async () => {
       throw "boom";
     }).currentUrl(),
-    /not installed or not on PATH: boom/,
+    /tailscale command failed: boom/,
+  );
+});
+
+test("other run failures are not blamed on a missing binary", async () => {
+  await assert.rejects(
+    tailscaleCli(async () => {
+      throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    }).funnelOn(1),
+    /tailscale command failed: timed out/,
   );
 });
 
@@ -82,7 +93,7 @@ test("currentUrl reads status without touching funnel", async () => {
     await tailscaleCli(fake.run).currentUrl(),
     "https://box.tailnet.ts.net",
   );
-  assert.deepEqual(fake.calls, [["status", "--json"]]);
+  assert.deepEqual(fake.calls, [["status", "--json", "--peers=false"]]);
 });
 
 test("execRun resolves exit codes and rejects when the binary is missing", async () => {

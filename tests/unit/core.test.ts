@@ -1307,13 +1307,14 @@ test("webhooks CLI resolves the public URL and prints install and status lines",
 
   const status = fakeCli({ loadConfig: () => withUrl });
   await runCli(["webhooks", "status"], status.dependencies);
-  assert.equal(status.lines.length, 12);
+  assert.equal(status.lines.length, 13);
   assert.equal(
     status.lines[0],
     "owner/repo: hook 5 https://hooks.example.com/webhooks/github",
   );
   assert.equal(status.lines[1], "  2026-10-02T00:00:00Z issue_comment 202");
-  assert.equal(status.lines[11], "owner/other: (no hook)");
+  assert.equal(status.lines[11], "owner/other:");
+  assert.equal(status.lines[12], "  (no hook)");
 
   const funnel = { ...makeConfig(), tailscaleFunnel: true };
   const viaInstall = fakeCli({ loadConfig: () => funnel });
@@ -1370,4 +1371,40 @@ test("daemon turns Funnel on before start and off on shutdown, tolerating teardo
     await new Promise((done) => setImmediate(done));
     assert.ok(failing.calls.includes("exit:0"));
   }
+});
+
+test("Funnel is released when stop fails or when startup fails after funnelOn", async () => {
+  const funnel = { ...makeConfig(), tailscaleFunnel: true };
+  const stopFails = fakeCli({
+    loadConfig: () => funnel,
+    createDaemon: () => ({
+      async start() {},
+      async stop() {
+        throw new Error("stop failed");
+      },
+      dispatchEvents() {},
+      async idle() {},
+    }),
+  });
+  await runCli([], stopFails.dependencies);
+  stopFails.signals.get("SIGINT")?.();
+  await new Promise((done) => setImmediate(done));
+  assert.deepEqual(stopFails.calls.slice(-2), ["funnelOff", "exit:0"]);
+
+  const startFails = fakeCli({
+    loadConfig: () => funnel,
+    tailscale: {
+      async funnelOn() {
+        throw new Error("status failed");
+      },
+      async funnelOff() {
+        startFails.calls.push("funnelOff");
+      },
+      async currentUrl() {
+        return "";
+      },
+    },
+  });
+  await assert.rejects(runCli([], startFails.dependencies), /status failed/);
+  assert.deepEqual(startFails.calls, ["funnelOff"]);
 });

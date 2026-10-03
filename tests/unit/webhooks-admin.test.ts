@@ -97,7 +97,7 @@ test("install updates a hook at the same URL and leaves other hooks alone", asyn
   const results = await installWebhooks({
     config: makeConfig(),
     github,
-    publicUrl: "https://box.ts.net/ignored/path",
+    publicUrl: "https://box.ts.net",
   });
   assert.deepEqual([results[0].action, results[0].hookId], ["updated", 8]);
   assert.equal(results[1].action, "created");
@@ -131,4 +131,18 @@ test("status reports a missing hook and recent deliveries", async () => {
   assert.equal(results[1].hookId, 9);
   assert.equal(results[1].deliveries[0].statusCode, 202);
   assert.equal(results[1].url, TARGET);
+});
+
+test("a PUBLIC_URL path prefix is kept, with or without a trailing slash", async () => {
+  for (const publicUrl of [
+    "https://x.example/hooks",
+    "https://x.example/hooks//",
+  ]) {
+    const [result] = await installWebhooks({
+      config: makeConfig(),
+      github: fakeGithub(),
+      publicUrl,
+    });
+    assert.equal(result.url, "https://x.example/hooks/webhooks/github");
+  }
 });

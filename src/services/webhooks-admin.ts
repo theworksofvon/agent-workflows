@@ -75,7 +75,7 @@ export async function webhookStatus(args: {
 }
 
 function targetUrl(publicUrl: string): string {
-  return new URL(WEBHOOK_PATH, publicUrl).toString();
+  return new URL(publicUrl.replace(/\/+$/, "") + WEBHOOK_PATH).toString();
 }
 
 function findHook(hooks: HookRecord[], url: string): HookRecord | undefined {

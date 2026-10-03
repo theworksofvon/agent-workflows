@@ -8,13 +8,18 @@ type Run = (args: string[]) => Promise<{ stdout: string; exitCode: number }>;
 export function execRun(binary: string): Run {
   return (args) =>
     new Promise((resolve, reject) => {
-      execFile(binary, args, (err, stdout) => {
-        if (err && typeof err.code !== "number") {
-          reject(err);
-          return;
-        }
-        resolve({ stdout, exitCode: err ? (err.code as number) : 0 });
-      });
+      execFile(
+        binary,
+        args,
+        { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout) => {
+          if (err && typeof err.code !== "number") {
+            reject(err);
+            return;
+          }
+          resolve({ stdout, exitCode: err ? (err.code as number) : 0 });
+        },
+      );
     });
 }
 
@@ -24,14 +29,16 @@ export function tailscaleCli(run: Run = execRun("tailscale")): TailscalePort {
       return await run(args);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`tailscale is not installed or not on PATH: ${reason}`, {
-        cause: err,
-      });
+      const label =
+        (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+          ? "tailscale is not installed or not on PATH"
+          : "tailscale command failed";
+      throw new Error(`${label}: ${reason}`, { cause: err });
     }
   };
 
   const currentUrl = async (): Promise<string> => {
-    const status = await call(["status", "--json"]);
+    const status = await call(["status", "--json", "--peers=false"]);
     if (status.exitCode !== 0) {
       throw new Error(`tailscale status failed (exit ${status.exitCode})`);
     }

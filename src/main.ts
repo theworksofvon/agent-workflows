@@ -177,19 +177,34 @@ export async function runCli(
 
   const stop = (sig: "SIGINT" | "SIGTERM") => {
     log.info("shutting down", { signal: sig });
-    void daemon
-      .stop()
-      .then(() => funnelOff(config, dependencies.tailscale))
-      .finally(() => dependencies.exit(0));
+    void (async () => {
+      try {
+        await daemon.stop();
+      } catch (err) {
+        log.error("daemon stop failed", { error: describe(err) });
+      }
+      await funnelOff(config, dependencies.tailscale);
+      dependencies.exit(0);
+    })();
   };
   dependencies.onSignal("SIGINT", () => stop("SIGINT"));
   dependencies.onSignal("SIGTERM", () => stop("SIGTERM"));
 
-  if (config.tailscaleFunnel) {
-    const url = await dependencies.tailscale.funnelOn(config.port);
-    log.info("tailscale funnel on", { url });
+  try {
+    if (config.tailscaleFunnel) {
+      const url = await dependencies.tailscale.funnelOn(config.port);
+      log.info("tailscale funnel on", { url });
+    }
+    await daemon.start();
+  } catch (err) {
+    // funnelOn can fail after `funnel --bg` already took effect.
+    await funnelOff(config, dependencies.tailscale);
+    throw err;
   }
-  await daemon.start();
+}
+
+function describe(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 async function funnelOff(config: Config, tailscale: TailscalePort) {
@@ -197,9 +212,7 @@ async function funnelOff(config: Config, tailscale: TailscalePort) {
   try {
     await tailscale.funnelOff(config.port);
   } catch (err) {
-    log.error("tailscale funnel off failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.error("tailscale funnel off failed", { error: describe(err) });
   }
 }
 
@@ -250,7 +263,8 @@ export async function runWebhooksCommand(
   for (const r of results) {
     const slug = `${r.repo.owner}/${r.repo.repo}`;
     if (r.hookId === null) {
-      dependencies.writeLine(`${slug}: (no hook)`);
+      dependencies.writeLine(`${slug}:`);
+      dependencies.writeLine("  (no hook)");
       continue;
     }
     dependencies.writeLine(`${slug}: hook ${r.hookId} ${r.url}`);
