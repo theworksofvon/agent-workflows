@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Flow Steps Open Their Code
+
+Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Make the overview's flows explain themselves and take the reviewer to the exact code of a step.
+Message: Each flow step now names its file and lines, and a click opens that code with the lines highlighted. A "How it works" heading explains the flows and the +, ~, and − marks.
+Added/Changed: The guide agent writes a `ref` per flow step: a changed file and the first and last line on the new side. The guide parser keeps a ref only when it names a file in the PR with usable lines, and drops it otherwise without failing the guide. A step shows `file:lines` at its right, or `Ch N` when it has only a chapter, with the chapter title and full path in a tooltip. The whole step is a link: to its chapter, or to the diff when no chapter holds the file. The opened lines stay highlighted until the next jump from the overview.
+Fixed/Removed: The bare chapter number chip ("01") at the right of a step is gone.
+Handoff: Guides written before this change have no refs; their steps still open the chapter. Re-run a review to get line links.
+
 ### Overview Layout with a Side Panel
 
 Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.

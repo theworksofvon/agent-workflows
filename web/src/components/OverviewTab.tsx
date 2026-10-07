@@ -10,7 +10,7 @@ import type {
   HumanState,
   ReviewSession,
 } from "../types";
-import { FlowDiagram } from "./FlowDiagram";
+import { FlowDiagram, type ChapterLabel } from "./FlowDiagram";
 
 export function OverviewTab({
   session,
@@ -25,8 +25,9 @@ export function OverviewTab({
   human: HumanState;
   onJump: Jump;
 }) {
-  const chapterNumbers = new Map(
-    guide?.chapters.map((c, i) => [c.id, i + 1]) ?? [],
+  const chapters = new Map<string, ChapterLabel>(
+    guide?.chapters.map((c, i) => [c.id, { number: i + 1, title: c.title }]) ??
+      [],
   );
   const chapterOf = new Map<string, string>();
   for (const c of guide?.chapters ?? []) {
@@ -61,17 +62,31 @@ export function OverviewTab({
           )}
         </div>
         {guide && guide.overview.flows.length > 0 && (
-          <div className="overview-flows">
+          <section className="overview-flows">
+            <div className="overview-flows-head">
+              <h2>How it works</h2>
+              <p className="muted small">
+                Each flow follows one path through the code, one step per row.
+                Switch Before and After to compare.{" "}
+                <span className="flow-legend">
+                  <span className="add">+</span> added{" "}
+                  <span className="warn">~</span> changed{" "}
+                  <span className="del">−</span> removed
+                </span>
+                . Click a step to open its code.
+              </p>
+            </div>
             {guide.overview.flows.map((flow, i) => (
               <FlowDiagram
                 key={i}
                 flow={flow}
                 sessionId={session.id}
-                chapterNumbers={chapterNumbers}
+                chapters={chapters}
+                chapterOf={chapterOf}
                 onJump={onJump}
               />
             ))}
-          </div>
+          </section>
         )}
       </div>
 

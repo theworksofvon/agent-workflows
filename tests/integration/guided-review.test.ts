@@ -53,6 +53,10 @@ test("a guided review runs end to end and publishes one review", async () => {
     chapters.flatMap((c: { files: string[] }) => c.files).sort(),
     ["app.ts", "greet.ts"],
   );
+  // A step keeps a location in a changed file and drops one outside the PR.
+  const [step, outside] = ready.session.guide.value.overview.flows[0].after;
+  assert.deepEqual(step.ref, { path: "app.ts", start: 1, end: 3 });
+  assert.equal(outside.ref, null);
   assert.equal(ready.findings.length, 1);
   const [finding] = ready.findings;
   assert.equal(finding.severity, "high");

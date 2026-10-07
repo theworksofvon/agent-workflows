@@ -6,11 +6,13 @@ import type {
   Verdict,
 } from "../types";
 
-/** A finding the page scrolls to and highlights after a jump. */
-export interface FocusTarget {
-  findingId: string;
-  path: string;
-}
+/**
+ * What the page scrolls to after a jump: a finding, which flashes, or a
+ * line range, which stays highlighted until the next jump.
+ */
+export type FocusTarget =
+  | { findingId: string; path: string }
+  | { path: string; lines: { start: number; end: number } };
 
 /**
  * A move from the overview to another tab. The page records `label` for the

@@ -30,7 +30,27 @@ if (guidePath) {
       overview: {
         context: "Adds a greeting to the widget.",
         steps: ["Add greet()", "Call it from the app"],
-        flows: [],
+        flows: [
+          {
+            title: "Greet a widget",
+            caption: "",
+            before: [],
+            after: [
+              {
+                label: "greet()",
+                change: "added",
+                chapter: null,
+                ref: { path: files[0], start: 1, end: 3 },
+              },
+              {
+                label: "not in the PR",
+                change: "changed",
+                chapter: null,
+                ref: { path: "nope.ts", start: 1 },
+              },
+            ],
+          },
+        ],
       },
       chapters: files.map((file, i) => ({
         id: `c${i + 1}`,

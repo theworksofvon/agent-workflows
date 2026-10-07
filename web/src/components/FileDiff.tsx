@@ -55,6 +55,10 @@ export const FileDiff = memo(function FileDiff({
 
   // A jump from the overview to a finding in this file opens it in full.
   const focusHere = review.focus?.path === file.path;
+  const refLines =
+    focusHere && review.focus && "lines" in review.focus
+      ? review.focus.lines
+      : null;
   useEffect(() => {
     if (!focusHere) return;
     setOpen(true);
@@ -140,6 +144,12 @@ export const FileDiff = memo(function FileDiff({
         <DiffLine
           key={`${h}:${i}`}
           line={line}
+          marked={
+            refLines !== null &&
+            line.newLine !== null &&
+            line.newLine >= refLines.start &&
+            line.newLine <= refLines.end
+          }
           tokens={tokens?.[h]?.[i]}
           active={composerLine !== null && composerLine === line.newLine}
           onComment={setComposerLine}
@@ -280,16 +290,21 @@ const DiffLine = memo(function DiffLine({
   line,
   tokens,
   active,
+  marked,
   onComment,
 }: {
   line: PatchLine;
   tokens: Token[] | undefined;
   active: boolean;
+  /** Inside the line range of the flow step that the reviewer opened. */
+  marked: boolean;
   onComment: (line: number) => void;
 }) {
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
   return (
-    <tr className={`dl dl-${line.kind} ${active ? "is-active" : ""}`}>
+    <tr
+      className={`dl dl-${line.kind} ${active ? "is-active" : ""} ${marked ? "is-ref" : ""}`}
+    >
       <td className="gutter">{line.oldLine}</td>
       <td className="gutter">
         {line.newLine !== null && (

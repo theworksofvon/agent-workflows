@@ -23,10 +23,18 @@ const FLOW_NODE_CHANGES: readonly FlowNodeChange[] = [
   "unchanged",
 ];
 
+/** Lines on the new side of a changed file that a flow step names. */
+export interface CodeRef {
+  path: string;
+  start: number;
+  end: number;
+}
+
 export interface FlowNode {
   label: string;
   change: FlowNodeChange;
   chapter: string | null;
+  ref: CodeRef | null;
 }
 
 export interface Flow {
@@ -100,7 +108,9 @@ export function parseGuide(
     overview: {
       context,
       steps,
-      flows: rawFlows.map((flow) => normalizeFlow(flow, ids, aliases)),
+      flows: rawFlows.map((flow) =>
+        normalizeFlow(flow, ids, aliases, new Set(changedPaths)),
+      ),
     },
     chapters: normalized,
   };
@@ -186,6 +196,7 @@ function normalizeFlow(
   value: unknown,
   chapterIds: Set<string>,
   aliases: Map<string, string>,
+  paths: Set<string>,
 ): Flow {
   if (!isRecord(value))
     throw new ReportInvalidError("each overview flow must be an object");
@@ -195,8 +206,8 @@ function normalizeFlow(
   return {
     title,
     caption: (value.caption ?? "").trim(),
-    before: normalizeNodes(value.before, "before", chapterIds, aliases),
-    after: normalizeNodes(value.after, "after", chapterIds, aliases),
+    before: normalizeNodes(value.before, "before", chapterIds, aliases, paths),
+    after: normalizeNodes(value.after, "after", chapterIds, aliases, paths),
   };
 }
 
@@ -205,6 +216,7 @@ function normalizeNodes(
   side: string,
   chapterIds: Set<string>,
   aliases: Map<string, string>,
+  paths: Set<string>,
 ): FlowNode[] {
   if (!Array.isArray(value))
     throw new ReportInvalidError(`flow ${side} must be an array`);
@@ -220,8 +232,24 @@ function normalizeNodes(
         ? (node.change as FlowNodeChange)
         : "changed",
       chapter: chapter !== null && chapterIds.has(chapter) ? chapter : null,
+      ref: codeRef(node.ref, paths),
     };
   });
+}
+
+/**
+ * A step's location is a convenience, so a ref that names a file outside
+ * the PR or has unusable lines is dropped rather than failing the guide.
+ */
+function codeRef(value: unknown, paths: Set<string>): CodeRef | null {
+  if (!isRecord(value)) return null;
+  const { path, start } = value;
+  const end = value.end ?? start;
+  if (typeof path !== "string" || !paths.has(path)) return null;
+  if (!Number.isInteger(start) || (start as number) < 1) return null;
+  if (!Number.isInteger(end) || (end as number) < (start as number))
+    return null;
+  return { path, start: start as number, end: end as number };
 }
 
 function trimmed(value: unknown): string | null {

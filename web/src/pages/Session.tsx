@@ -225,6 +225,14 @@ export function Session({
     let raf = 0;
     let timer: number | undefined;
     const find = () => {
+      if ("lines" in focus) {
+        const file = document.getElementById(fileAnchor(focus.path));
+        const line = file?.querySelector(".dl.is-ref");
+        if (line) line.scrollIntoView({ block: "center" });
+        else if (frames++ < 120) raf = requestAnimationFrame(find);
+        else file?.scrollIntoView({ block: "start" });
+        return;
+      }
       const el = document.getElementById(findingAnchor(focus.findingId));
       if (el) {
         el.scrollIntoView({ block: "center" });

@@ -1726,7 +1726,7 @@ html.dark .toast-error {
 .flow-step {
   position: relative;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
 }
@@ -1756,8 +1756,26 @@ html.dark .toast-error {
   line-height: 1;
 }
 
+.overview-flows-head h2 {
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.flow-legend .add,
+.flow-legend .warn,
+.flow-legend .del {
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.flow-legend .warn {
+  color: var(--warning-foreground);
+}
+
 .flow-node {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
   padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1770,6 +1788,31 @@ html.dark .toast-error {
 
 html.dark .flow-node {
   border-color: var(--input);
+}
+
+.flow-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.flow-where {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.flow-node.is-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.flow-node.is-link:hover {
+  border-color: var(--primary);
+}
+
+.flow-node.is-link:hover .flow-where {
+  color: var(--primary-text);
 }
 
 .flow-added .flow-node {
@@ -1806,27 +1849,6 @@ html.dark .flow-node {
 .flow-removed .flow-dot {
   color: var(--error-foreground);
   border-color: var(--error);
-}
-
-.flow-chapter {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 5px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: var(--muted-foreground);
-  font-size: 10.5px;
-}
-
-html.dark .flow-chapter {
-  border-color: var(--input);
-}
-
-.flow-chapter:hover {
-  border-color: var(--primary);
-  color: var(--primary-text);
 }
 
 .list-card {
@@ -3631,4 +3653,13 @@ html.dark .pr-badge {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--foreground);
+}
+
+/* The lines of the flow step that the reviewer opened from the overview. */
+.dl.is-ref td {
+  background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.dl.is-ref td.gutter:first-child {
+  box-shadow: inset 3px 0 0 var(--primary);
 }

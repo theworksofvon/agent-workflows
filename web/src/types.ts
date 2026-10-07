@@ -35,10 +35,19 @@ export type ChapterRole =
 
 export type FlowNodeChange = "added" | "changed" | "removed" | "unchanged";
 
+/** Lines on the new side of a changed file that a flow step names. */
+export interface CodeRef {
+  path: string;
+  start: number;
+  end: number;
+}
+
 export interface FlowNode {
   label: string;
   change: FlowNodeChange;
   chapter: string | null;
+  /** Absent in guides written before steps carried a location. */
+  ref?: CodeRef | null;
 }
 
 export interface Flow {
