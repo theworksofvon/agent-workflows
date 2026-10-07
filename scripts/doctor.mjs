@@ -7,7 +7,15 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = join(repoRoot, ".env");
-const env = existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {};
+// The Docker image sets this; its configuration comes from the environment.
+const inContainer = process.env.AGENT_WORKFLOWS_CONTAINER === "1";
+// Like the app: a variable already in the environment wins over .env.
+const env = {
+  ...(existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf8")) : {}),
+  ...Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => value),
+  ),
+};
 let failures = 0;
 let warnings = 0;
 
@@ -17,8 +25,15 @@ check(
   "Node 24 is required",
 );
 checkCommand("git", ["--version"], "Git");
-checkCommand("pnpm", ["--version"], "pnpm");
-check(existsSync(envPath), ".env exists", "Run mise run setup to create .env");
+if (inContainer) pass("Running in the Docker image; .env is not read");
+else {
+  checkCommand("pnpm", ["--version"], "pnpm");
+  check(
+    existsSync(envPath),
+    ".env exists",
+    "Run mise run setup to create .env",
+  );
+}
 check(
   existsSync(join(repoRoot, "dist", "main.js")),
   "Compiled production entrypoint exists",
@@ -26,23 +41,24 @@ check(
 );
 
 const token = env.GITHUB_TOKEN ?? "";
-check(
-  token.length > 10 && !/x{4,}|replace|example/i.test(token),
-  "GITHUB_TOKEN is configured",
-  "Set a non-placeholder GITHUB_TOKEN in .env",
-);
+const ghLogins = ghAccounts();
+if (ghLogins.length > 0)
+  pass(`gh has a github.com account: ${ghLogins.join(", ")}`);
+else warn("gh has no github.com account; run gh auth login");
+if (token !== "")
+  check(
+    token.length > 10 && !/x{4,}|replace|example/i.test(token),
+    "GITHUB_TOKEN is configured",
+    "Set a non-placeholder GITHUB_TOKEN, or remove it and use gh's accounts",
+  );
+else
+  check(
+    ghLogins.length > 0,
+    "GITHUB_TOKEN is not set; the app uses gh's accounts",
+    "Log in with gh auth login, or set GITHUB_TOKEN",
+  );
 
-const repos = (env.REPOS ?? "")
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
-check(
-  repos.length > 0 && repos.every((slug) => /^[^/\s]+\/[^/\s]+$/.test(slug)),
-  `REPOS contains ${repos.length} valid repository slug(s)`,
-  "Set REPOS=owner/repo[,owner/repo] in .env",
-);
-
-const allowedAgents = new Set(["codex", "claude-code", "zcode"]);
+const allowedAgents = new Set(["codex", "claude-code"]);
 const primaryAgent = env.AGENT || "codex";
 check(
   allowedAgents.has(primaryAgent),
@@ -53,35 +69,27 @@ const agents = new Set([primaryAgent]);
 if (env.REVIEW_ADVERSARIAL_AGENT) agents.add(env.REVIEW_ADVERSARIAL_AGENT);
 for (const agent of agents) checkAgent(agent);
 
-const requiredSkills = ["pr-feedback", "pr-reviewer"];
+const requiredSkills = ["pr-reviewer"];
 const skillRoots = {
-  codex: join(homedir(), ".codex", "skills"),
-  "claude-code": join(homedir(), ".claude", "skills"),
-  zcode: null,
+  codex: [
+    join(homedir(), ".agents", "skills"),
+    join(env.CODEX_HOME || join(homedir(), ".codex"), "skills"),
+  ],
+  "claude-code": [
+    join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "skills"),
+  ],
 };
 for (const agent of agents) {
-  const root = skillRoots[agent];
-  if (!root) continue;
+  const roots = skillRoots[agent];
+  if (!roots) continue;
   const missing = requiredSkills.filter(
-    (s) => !existsSync(join(root, s, "SKILL.md")),
+    (s) => !roots.some((root) => existsSync(join(root, s, "SKILL.md"))),
   );
-  if (missing.length === 0) pass(`${agent} has the required skills`);
+  if (missing.length === 0) pass(`${agent} has the required skill`);
   else
     warn(
-      `${agent} is missing skills: ${missing.join(", ")}; install them from vstack`,
+      `${agent} is missing the skill: ${missing.join(", ")}; install it from vstack`,
     );
-}
-
-const funnel = env.TAILSCALE_FUNNEL === "true";
-if (env.PUBLIC_URL || funnel) {
-  check(
-    Boolean(env.WEBHOOK_SECRET),
-    "WEBHOOK_SECRET is configured",
-    "WEBHOOK_SECRET is required when webhooks are enabled",
-  );
-  if (funnel) checkCommand("tailscale", ["version"], "Tailscale");
-} else {
-  pass("Webhooks disabled; polling only");
 }
 
 if (failures > 0) {
@@ -104,7 +112,6 @@ function checkAgent(agent) {
       fallback: "claude",
       auth: ["auth", "status"],
     },
-    zcode: { envName: "ZCODE_BIN", fallback: "zcode", auth: null },
   };
   const spec = specs[agent];
   if (!spec) {
@@ -118,7 +125,6 @@ function checkAgent(agent) {
     return;
   }
   pass(`${agent} executable: ${resolved}`);
-  if (!spec.auth) return;
   const result = spawnSync(resolved, spec.auth, {
     encoding: "utf8",
     timeout: 10_000,
@@ -132,6 +138,31 @@ function checkAgent(agent) {
     `${agent} authentication is available`,
     `${agent} is installed but not authenticated`,
   );
+}
+
+/** gh's github.com logins, without letting a token variable stand in. */
+function ghAccounts() {
+  const gh = findExecutable("gh");
+  if (!gh) return [];
+  const ghEnv = { ...process.env };
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN"]) delete ghEnv[name];
+  const result = spawnSync(
+    gh,
+    [
+      "auth",
+      "status",
+      "--hostname",
+      "github.com",
+      "--json",
+      "hosts",
+      "--jq",
+      '[.hosts["github.com"][]? | select(.state == "success") | .login] | join(",")',
+    ],
+    { encoding: "utf8", timeout: 10_000, env: ghEnv },
+  );
+  return result.status === 0 && result.stdout.trim() !== ""
+    ? result.stdout.trim().split(",")
+    : [];
 }
 
 function checkCommand(command, args, label) {

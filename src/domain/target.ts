@@ -1,4 +1,4 @@
-import type { ReviewTarget } from "./events.js";
+import type { ReviewTarget } from "./pull-request.js";
 
 const SLUG_PATTERN = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$/;
 const URL_PATTERN =

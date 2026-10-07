@@ -1,5 +1,5 @@
 import type { ReviewResult } from "./decisions.js";
-import type { ReviewContext } from "./events.js";
+import type { ReviewContext } from "./pull-request.js";
 
 export type ReviewAdversarialMode = "off" | "auto" | "always";
 
@@ -8,7 +8,7 @@ export interface AdversarialDecision {
   reasons: string[];
 }
 
-const SENSITIVE_PATH =
+export const SENSITIVE_PATH =
   /(^|\/)(auth|security|crypto|payment|billing|permission|migration|migrations|schema|database|db)(\/|\.|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.github\/workflows\/)/i;
 
 export function decideAdversarialReview(

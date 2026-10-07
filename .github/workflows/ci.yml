@@ -36,6 +36,8 @@ jobs:
         run: mise run format:check
       - name: Check Node scripts
         run: mise run check:scripts
+      - name: Typecheck, test, and build the web app
+        run: mise run web:check
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 

@@ -1,5 +1,5 @@
 import type { ReviewResult } from "../domain/decisions.js";
-import type { ReviewContext } from "../domain/events.js";
+import type { ReviewContext } from "../domain/pull-request.js";
 
 export interface BuildReviewPromptOptions {
   role?: "primary" | "adversarial";
@@ -34,22 +34,13 @@ export function buildReviewPrompt(
     );
   }
 
-  lines.push(
-    "",
-    `Repository: ${ctx.repo.owner}/${ctx.repo.repo}`,
-    `PR #${ctx.prNumber}: ${ctx.title}`,
-    `Branch (already checked out): ${ctx.headRef} (base: ${ctx.baseRef})`,
-  );
-
-  if (ctx.body) {
+  lines.push(...describePullRequest(ctx));
+  if (!includePatches) {
     lines.push(
       "",
-      "--- PR description ---",
-      ctx.body,
-      "--- end PR description ---",
+      `Run \`git diff origin/${ctx.baseRef}...HEAD\` to see the full change.`,
     );
   }
-
   lines.push("", "--- changed files ---");
   for (const file of ctx.files) {
     lines.push(
@@ -72,4 +63,23 @@ export function buildReviewPrompt(
   lines.push("--- end changed files ---");
 
   return lines.join("\n");
+}
+
+/** Repository, PR title, branches, and description lines shared by agent prompts. */
+export function describePullRequest(ctx: ReviewContext): string[] {
+  const lines = [
+    "",
+    `Repository: ${ctx.repo.owner}/${ctx.repo.repo}`,
+    `PR #${ctx.prNumber}: ${ctx.title}`,
+    `Branch (already checked out): ${ctx.headRef} (base: ${ctx.baseRef})`,
+  ];
+  if (ctx.body) {
+    lines.push(
+      "",
+      "--- PR description ---",
+      ctx.body,
+      "--- end PR description ---",
+    );
+  }
+  return lines;
 }

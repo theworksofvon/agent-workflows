@@ -28,7 +28,7 @@ import {
 import { decideAdversarialReview } from "../../src/domain/risk.js";
 import { parseReviewTarget } from "../../src/domain/target.js";
 import type { ReviewResult } from "../../src/domain/decisions.js";
-import type { ReviewContext } from "../../src/domain/events.js";
+import type { ReviewContext } from "../../src/domain/pull-request.js";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -50,34 +50,17 @@ function createBareRemote(root: string): string {
 function makeConfig(root: string): Config {
   return {
     githubToken: "test-token",
-    repos: [],
-    pollIntervalSec: 60,
-    commentBatchWindowSec: 120,
-    commentBatchMinComments: 2,
-    commentBatchMaxWaitSec: 300,
-    prContextHistoryLimit: 5,
-    commentBatchHistoryLimit: 20,
-    processedCommentKeyLimit: 2000,
-    agentRetryDelaySec: 1800,
-    agentMaxAttempts: 5,
     agent: "fake",
     reviewAdversarialMode: "off",
     reviewAdversarialAgent: "fake",
-    processExistingCommentsOnFirstRun: true,
-    agentSelfUser: null,
-    allowedAuthors: null,
     stateDir: join(root, "state"),
-    zcodeBin: "zcode",
     claudeCodeBin: "claude",
     codexBin: "codex",
     keepWorkdirs: false,
-    host: "127.0.0.1",
-    port: 3773,
-    webhookSecret: null,
-    publicUrl: null,
-    tailscaleFunnel: false,
     maxConcurrentRuns: 3,
-    autoReview: false,
+    uiHost: "127.0.0.1",
+    uiPort: 4773,
+    uiPublicPort: 4773,
   };
 }
 
@@ -115,7 +98,7 @@ function writeReport(prompt: string, text: string): void {
   writeFileSync(reportPathOf(prompt), text);
 }
 
-type ReviewArgs = Omit<ReviewOptions, "git" | "state" | "github"> & {
+type ReviewArgs = Omit<ReviewOptions, "git" | "state" | "github" | "token"> & {
   client: FakeReviewClient;
 };
 
@@ -126,6 +109,7 @@ function runReview(args: ReviewArgs) {
     github: client,
     git: gitExec,
     state: sqliteState(args.config),
+    token: "test-token",
   });
 }
 
@@ -208,14 +192,14 @@ class FakeReviewClient {
 }
 
 test("parseReviewTarget handles owner/repo slug and GitHub PR URL", () => {
-  assert.deepEqual(parseReviewTarget("EK-LABS-LLC/trace-cli#11"), {
-    repo: { owner: "EK-LABS-LLC", repo: "trace-cli" },
+  assert.deepEqual(parseReviewTarget("acme-labs/trace-cli#11"), {
+    repo: { owner: "acme-labs", repo: "trace-cli" },
     prNumber: 11,
   });
   assert.deepEqual(
-    parseReviewTarget("https://github.com/EK-LABS-LLC/pluto-predicts/pull/1"),
+    parseReviewTarget("https://github.com/acme-labs/pluto-predicts/pull/1"),
     {
-      repo: { owner: "EK-LABS-LLC", repo: "pluto-predicts" },
+      repo: { owner: "acme-labs", repo: "pluto-predicts" },
       prNumber: 1,
     },
   );
@@ -265,6 +249,11 @@ test("adversarial prompt omits duplicated patches and marks primary output untru
   });
   assert.doesNotMatch(prompt, /@@ -1,2 \+1,3 @@/);
   assert.match(prompt, /Patch omitted to reduce prompt cost/);
+  assert.ok(
+    prompt.includes(
+      "Run `git diff origin/develop...HEAD` to see the full change.",
+    ),
+  );
   assert.match(prompt, /untrusted hypotheses/);
 });
 

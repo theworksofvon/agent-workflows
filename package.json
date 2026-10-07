@@ -2,7 +2,7 @@
   "name": "agent-workflows",
   "version": "0.1.0",
   "private": true,
-  "description": "Local daemon that bridges signals (PR comments, etc.) to pluggable coding agents.",
+  "description": "Local guided pull-request review app: agents read the PR first, you give the verdicts, and one GitHub review is published.",
   "type": "module",
   "engines": {
     "node": ">=24 <25",
@@ -12,7 +12,8 @@
   "scripts": {
     "start": "node --enable-source-maps dist/main.js",
     "agent-workflows": "node --enable-source-maps dist/main.js",
-    "review": "node --enable-source-maps dist/main.js review"
+    "review": "node --enable-source-maps dist/main.js review",
+    "ui": "node --enable-source-maps dist/main.js ui"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

@@ -1,26 +1,36 @@
 import type { AgentAdapter } from "./agent.interface.js";
 import type { Config } from "../../config.js";
-import { zcodeAdapter } from "./zcode.js";
-import { claudeCodeAdapter } from "./claude-code.js";
-import { codexAdapter } from "./codex.js";
+import { cliAgent } from "./cli-agent.js";
 import { log } from "../../log.js";
 
 /**
- * Pick an adapter by name. New adapters register here; nothing else in the
- * system needs to know about specific agents.
+ * Pick an adapter by name. A new CLI agent is one more branch here with its
+ * binary and flags; nothing else in the system knows about specific agents.
  */
 export function getAgent(name: string, cfg: Config): AgentAdapter {
   switch (name) {
-    case "zcode":
-      return zcodeAdapter({ binary: cfg.zcodeBin });
     case "claude-code":
-      return claudeCodeAdapter({ binary: cfg.claudeCodeBin });
+      return cliAgent({
+        name,
+        binary: cfg.claudeCodeBin,
+        args: ["-p", "--dangerously-skip-permissions"],
+      });
     case "codex":
-      return codexAdapter({ binary: cfg.codexBin });
+      return cliAgent({
+        name,
+        binary: cfg.codexBin,
+        args: [
+          "exec",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--color",
+          "never",
+          "-",
+        ],
+      });
     default:
       log.error("unknown agent adapter", { requested: name });
       throw new Error(
-        `Unknown agent adapter "${name}". Expected one of: codex, claude-code, zcode.`,
+        `Unknown agent adapter "${name}". Expected one of: codex, claude-code.`,
       );
   }
 }

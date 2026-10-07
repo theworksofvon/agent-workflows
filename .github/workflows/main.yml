@@ -49,6 +49,7 @@ jobs:
       - run: mise run lint
       - run: mise run format:check
       - run: mise run check:scripts
+      - run: mise run web:check
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 

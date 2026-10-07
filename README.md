@@ -1,36 +1,45 @@
 # agent-workflows
 
-Connect GitHub pull-request activity to local coding agents. Code owns every
-deterministic step: intake, batching, worktrees, pushes, and what gets posted.
-The agent owns every judgment call: which comments to act on, what to change,
-and how to reply.
+A local app for reviewing GitHub pull requests yourself, with coding agents
+doing the reading first. Agents split a PR into chapters and find problems.
+You give each finding a verdict, add your own comments, and publish one
+GitHub review after a preview. Nothing posts without your confirmation.
+
+The repository also has a one-shot `review` command that runs the same agent
+review from the terminal and can post the findings.
 
 ## What it offers
 
-| Capability            | What happens                                                                                                                                                                       |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PR comment automation | Batches related feedback, runs an agent in an isolated worktree, and safely pushes resulting commits back to the PR branch.                                                        |
-| Event-driven intake   | GitHub webhooks deliver comments and PR events as they happen. Polling continues every five minutes as a reconciliation pass, so either source can be off with no behavior change. |
-| Per-comment decisions | The agent must write a report marking every comment `addressed`, `skipped`, or `needs_human`. Code turns that report into pushes, thread replies, and one summary comment.         |
-| Manual PR review      | Runs a read-only review against any accessible PR. It prints findings by default and can post one grouped GitHub review with `--post`.                                             |
-| Adversarial review    | Optionally sends the primary result through an independent verification pass for large, sensitive, or high-severity changes.                                                       |
+| Capability         | What happens                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inbox              | Lists the open PRs that request your review, that you wrote, or that involve you, for the GitHub account you choose, with CI checks per PR.               |
+| Accounts           | Acts as any account that `gh` has logged in. Each review fetches, clones, checks, and publishes as the account that started it.                           |
+| Triage             | Decides which PRs need a deep review, with rules over the PR metadata.                                                                                    |
+| Guided review      | A guide agent splits the diff into chapters, ordered core-first. A review agent writes findings inline on the lines they concern, in a separate worktree. |
+| Adversarial review | An independent agent checks the primary review for large, sensitive, or high-severity changes, or when triage asks for a deep review.                     |
+| Verdicts           | You mark each finding agree, disagree, or unsure, with a reason, mark chapters and files as reviewed, and add your own comments.                          |
+| Publish            | One combined GitHub review, pinned to the commit that the agents read. It lists the agent findings you rejected, with your reasons.                       |
+| `review` command   | A read-only review of any PR that your token can read. It prints findings by default, and `--post` posts the new ones as one grouped review.              |
 
 ```text
-GitHub webhook ─┐
-                ├─> batch gate ─> per-PR lane ─> isolated worktree ─> agent + report ─> guarded push + replies
-GitHub poll ────┘                                                  ↘ review-only ─> findings/review
+inbox ─> triage ─> guide agent  ─┐
+                   review agent ─┼─> your verdicts and comments ─> preview ─> one GitHub review
+                   adversarial  ─┘
 ```
 
-## Clean install
+## Install
 
 ### Prerequisites
 
 - Git
 - [mise](https://mise.jdx.dev), which installs the pinned Node 24 and pnpm 11
   from `mise.toml`. Without mise, install those two versions yourself.
-- A GitHub token
-- At least one supported agent CLI: Codex, Claude Code, or ZCode
-- Tailscale only when using `TAILSCALE_FUNNEL=true`
+- [`gh`](https://cli.github.com), logged in to each GitHub account you want
+  the app to act as, or a GitHub token in `GITHUB_TOKEN`. Without a gh
+  account, the app acts as the account of `GITHUB_TOKEN`.
+- At least one supported agent CLI: Codex or Claude Code
+
+To run the app in Docker instead, see [Run with Docker](#run-with-docker).
 
 ### 1. Set up the repository
 
@@ -38,13 +47,14 @@ GitHub poll ────┘                                                  ↘
 git clone <repository-url>
 cd agent-workflows
 mise install                  # Node 24 and pnpm 11 from mise.toml
-mise run setup
+mise run setup                # install, build, and create .env
+mise run web:build            # build the web app into web/dist
 ```
 
-`mise run setup` installs locked dependencies, builds production JavaScript,
-and creates `.env` without overwriting an existing one.
+`mise run setup` does not overwrite an existing `.env`. Run
+`mise run web:build` again after you change `web/`.
 
-### 2. Authenticate an agent and install its skills
+### 2. Authenticate an agent and install its skill
 
 Choose the adapter you will put in `.env`:
 
@@ -53,28 +63,27 @@ codex login                   # AGENT=codex
 claude auth login             # AGENT=claude-code
 ```
 
-ZCode users must install and authenticate its CLI separately.
-
-Install the `pr-feedback` and `pr-reviewer` skills from
+Install the `pr-reviewer` skill from
 [vstack](https://github.com/theworksofvon/vstack) into the harness you chose.
-The daemon launches the agent with those skills by name and does not bundle
-them.
+The app launches the review agents with that skill by name and does not
+bundle it.
 
 ### 3. Configure GitHub
 
-Edit `.env`. The minimum daemon configuration is:
+Log in each account that the app can act as with `gh auth login`;
+`gh auth status` must list it for github.com. Then edit `.env`. The minimum
+configuration is:
 
 ```dotenv
-GITHUB_TOKEN=replace-me
-REPOS=owner/repo,owner/another-repo
 AGENT=codex
 ```
 
-The token must be able to read PRs and comments, create comments/reviews, clone
-the repository, and push to its PR branches. For a fine-grained token this
-normally means repository Contents, Pull requests, and Issues read/write access.
-Registering webhooks with `webhooks install` additionally needs
-`admin:repo_hook` (classic) or Webhooks read/write (fine-grained).
+`GITHUB_TOKEN` is optional when gh has an account. When it is set, the
+`review` command uses it, and the app uses its account only when gh has no
+account. Without it, `review` acts as gh's active account. The token must be
+able to read PRs, clone the repository, and create reviews. For a
+fine-grained token this normally means repository Contents read and Pull
+requests read/write access.
 
 ### 4. Verify and run
 
@@ -84,203 +93,236 @@ pnpm start
 ```
 
 `doctor` checks the runtime, Git, `.env`, the selected agent executable and
-authentication, the required skills in that agent's skill directory, and the
-webhook configuration without making GitHub or model calls.
+authentication, and the `pr-reviewer` skill in that agent's skill directory.
+It makes no GitHub or model calls.
 
-With no public URL configured the daemon polls every 300 seconds and nothing
-else. See [Receiving webhooks](#receiving-webhooks) to turn on event delivery
-and [Running in the background](#running-in-the-background) to keep it alive
-across terminal exits and restarts.
+`pnpm start` serves the app and its API at http://127.0.0.1:4773 until you
+press `Ctrl+C`. Logs stream to the terminal, and `Ctrl+C` or `SIGTERM` shuts
+down in order: the app stops taking requests, a publish in flight finishes,
+running reviews get 15 seconds, and reviews still running after that are
+marked interrupted before the database closes.
 
-## Common commands
+## Run with Docker
 
-| Command                                  | Purpose                                                                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `mise run setup`                         | Install dependencies, build, and create `.env`.                                    |
-| `mise run doctor`                        | Validate a machine before starting the daemon.                                     |
-| `mise run build`                         | Compile TypeScript and source maps into `dist/`.                                   |
-| `pnpm start`                             | Run the compiled daemon with Node.                                                 |
-| `mise run dev`                           | Run with source watching.                                                          |
-| `pnpm review owner/repo#123`             | Review a PR locally without posting or changing files.                             |
-| `pnpm review owner/repo#123 --post`      | Post new actionable findings as one grouped review.                                |
-| `pnpm agent-workflows webhooks install`  | Create or update the GitHub webhook on every repo in `REPOS`.                      |
-| `pnpm agent-workflows webhooks status`   | List recent webhook deliveries and failures per repo.                              |
-| `pnpm agent-workflows service install`   | Install the daemon as a launchd agent (macOS) or systemd user unit (Linux).        |
-| `pnpm agent-workflows service uninstall` | Stop and remove that service definition.                                           |
-| `mise run test:unit`                     | Run fast unit tests.                                                               |
-| `mise run test:integration`              | Run local integration tests, including clean setup and temporary Git repositories. |
-| `mise run test`                          | Run every Node test with exact 100% coverage for production TypeScript.            |
-| `mise run test:smoke`                    | Exercise compiled CLI help routes without credentials or network access.           |
-| `mise run lint`                          | Run ESLint across TypeScript and Node scripts.                                     |
-| `mise run format:check`                  | Verify repository formatting with Prettier.                                        |
+The image holds the app, the web app, Git, `gh`, Claude Code, and Codex.
+`compose.yaml` publishes the app on `127.0.0.1` only and keeps its state and
+logins in named volumes, so they stay when you rebuild or remove the
+container. You need Docker with Compose, such as OrbStack or Docker Desktop.
 
-Review targets can also be full GitHub PR URLs. Use `--adversarial` or
-`--no-adversarial` to override the configured review policy. See
-[docs/pr-review-mode.md](docs/pr-review-mode.md).
+| Volume          | Mounted at                 | Holds                                       |
+| --------------- | -------------------------- | ------------------------------------------- |
+| `state`         | `/var/lib/agent-workflows` | The database, cached repos, and worktrees.  |
+| `gh-config`     | `/home/node/.config/gh`    | The accounts from `gh auth login`.          |
+| `claude-config` | `/home/node/.claude`       | Claude Code's settings and session history. |
+| `codex-home`    | `/home/node/.codex`        | The Codex login and settings.               |
 
-The compiled production process remains terminal-friendly: logs stream live,
-`Ctrl+C` performs graceful shutdown, and child agent/Git processes behave the
-same as in development. Use `mise run dev` when automatic restart after source
-edits is desired.
+### One-time setup
 
-## Receiving webhooks
+1. Create the environment file. Git ignores `docker.env`.
 
-The daemon binds `HOST` (default `127.0.0.1`) and `PORT` (default `3773`).
-How GitHub reaches it is one of three configurations:
+   ```bash
+   cp docker.env.example docker.env
+   ```
 
-| Configuration           | Behavior                                                                                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUBLIC_URL` set        | You own the ingress (reverse proxy, Cloudflare Tunnel, anything). The daemon registers that URL with GitHub.                                      |
-| `TAILSCALE_FUNNEL=true` | The daemon runs `tailscale funnel` on `PORT` at start and turns it off at stop, derives the public URL from `tailscale status`, and registers it. |
-| Neither                 | Webhooks are disabled. Polling alone drives the daemon.                                                                                           |
+2. For Claude Code, run `claude setup-token` on the host. Put the token that
+   it prints in `docker.env` as `CLAUDE_CODE_OAUTH_TOKEN`, and keep
+   `AGENT=claude-code`. The token uses your Claude subscription.
+3. Build the image and log in to GitHub. gh prints a code and a URL; open the
+   URL on the host. Run the command again for each account. The login stays
+   in the `gh-config` volume.
 
-`WEBHOOK_SECRET` is required whenever webhooks are on. Every delivery is
-verified with HMAC-SHA256 against it and deduplicated on the GitHub delivery
-ID. Unsigned or badly signed deliveries get a 401 and are logged without the
-body.
+   ```bash
+   docker compose build
+   docker compose run --rm app gh auth login --hostname github.com --git-protocol https --web
+   ```
+
+   gh does not log in while `GITHUB_TOKEN` is set. If `docker.env` sets it,
+   add `-e GITHUB_TOKEN=` after `run`.
+
+4. Optional, for Codex: log in with a device code, and set `AGENT=codex` or
+   `REVIEW_ADVERSARIAL_AGENT=codex` in `docker.env`. The login stays in the
+   `codex-home` volume.
+
+   ```bash
+   docker compose run --rm app codex login --device-auth
+   ```
+
+5. Give the agents the `pr-reviewer` skill. Compose mounts `SKILLS_DIR`
+   read-only as the skill directory of Claude Code and of Codex. The default
+   is `../vstack/skills`, a vstack clone beside this repository. Set
+   `SKILLS_DIR` to another directory that holds `pr-reviewer/SKILL.md` if
+   your clone is somewhere else. Do not use `~/.claude/skills` when its
+   entries are symlinks, because the links do not resolve in the container.
+6. Check the container:
+
+   ```bash
+   docker compose run --rm app node scripts/doctor.mjs
+   ```
+
+The container does not share your host's gh, Claude Code, or Codex logins.
+On macOS, gh keeps its tokens in the Keychain, so a mounted `~/.config/gh`
+has no tokens. A shared Codex login would let 2 machines refresh the same
+token, and `~/.codex` also holds host settings, hooks, and paths.
+
+### Daily use
 
 ```bash
-pnpm agent-workflows webhooks install   # idempotent: an existing hook at the daemon URL is updated in place
-pnpm agent-workflows webhooks status    # recent deliveries and failures for each repo
+docker compose up -d          # or: mise run docker:up
+docker compose logs -f app
+docker compose down
 ```
 
-Consumed events: `issue_comment`, `pull_request_review_comment`,
-`pull_request_review`, and `pull_request` with action `opened` or
-`ready_for_review`. Events from fork head repositories and draft PRs are
-dropped. When `AUTO_REVIEW=true`, newly opened or ready PRs get a posted
-review automatically.
+The app is at http://127.0.0.1:4773. To use another host port, set
+`HOST_PORT`, for example `HOST_PORT=4793 docker compose up -d`; compose
+gives the same port to the app as `UI_PUBLIC_PORT`, so its Host and Origin
+checks accept it. Inside the container the app listens on `0.0.0.0`, so it
+logs a warning that `UI_HOST` is not a loopback address; the published port
+stays on `127.0.0.1`. After `git pull`, run `docker compose build` (or
+`mise run docker:build`) and `docker compose up -d`. The agent CLI versions
+are build arguments in the `Dockerfile` (`CLAUDE_CODE_VERSION`,
+`CODEX_VERSION`).
 
-## Running in the background
+To run the `review` command in the container:
 
 ```bash
-mise run build
-pnpm agent-workflows service install
-pnpm agent-workflows service uninstall
+docker compose run --rm app node dist/main.js review owner/repo#123
 ```
 
-`service install` writes a launchd agent on macOS or a systemd user unit on
-Linux that runs the compiled daemon from the current checkout, restarts it on
-failure, and writes logs under `STATE_DIR/logs/`. On Linux it also enables
-lingering so the unit survives logout. On macOS a launchd agent only runs
-while that user is logged in; use a login item or a dedicated always-on
-machine if the daemon must run unattended.
+## Commands
 
-## Token-aware comment batching
-
-Immediate event delivery does not imply one model call per comment. Every event
-source feeds the same batch gate:
-
-1. Related comments are grouped by PR conversation or GitHub review ID.
-2. A 10-second quiet period absorbs comments arriving together.
-3. Two related comments make the batch eligible to run.
-4. A lone comment runs after five minutes so important feedback is not ignored.
-
-The defaults can be adjusted with `COMMENT_BATCH_WINDOW_SEC`,
-`COMMENT_BATCH_MIN_COMMENTS`, and `COMMENT_BATCH_MAX_WAIT_SEC`. Webhooks remove
-polling latency without bypassing this gate.
-
-Batches for the same PR run one at a time, in arrival order. Batches for
-different PRs run concurrently up to `MAX_CONCURRENT_RUNS`.
-
-## Safe first startup and state
-
-Runtime state lives under `STATE_DIR` (`./state` by default) and is intentionally
-not committed. It contains polling cursors, pending batches, duplicate guards,
-review history, cached bare repositories, managed worktrees, and service logs.
-
-A new state directory establishes cursors on its first successful poll and
-does **not** process comments that already existed. New comments are handled
-normally afterward. To intentionally process existing comments, set:
-
-```dotenv
-PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN=true
+```text
+pnpm start
+pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
 ```
 
-When moving a running daemon to another machine, stop the old daemon, then copy
-`state/agent-workflows.sqlite` together with its `-wal` and `-shm` siblings.
-Cached repositories and worktrees can be recreated.
-Never run two daemon instances against the same repositories and state history.
+| Command                                    | Purpose                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `pnpm start`                               | Serve the guided review app and API. `start` is the default; `ui` is an alias. |
+| `pnpm review owner/repo#123`               | Review a PR locally without posting or changing files.                         |
+| `pnpm review owner/repo#123 --post`        | Post the new findings as one grouped review.                                   |
+| `pnpm review owner/repo#123 --adversarial` | Force the adversarial pass; `--no-adversarial` skips it.                       |
+| `mise run start`                           | Build, then serve the app (alias `ui`).                                        |
+| `mise run dev`                             | Run from source and restart on change.                                         |
+| `mise run web:dev`                         | Run the web app with hot reload; `MOCK_API=1` uses fixture data.               |
+
+Review targets can also be full GitHub PR URLs. See
+[docs/pr-review-mode.md](docs/pr-review-mode.md) for the `review` command.
+
+## Guided review
+
+The overview ranks the open PRs in your inbox. A review splits the diff into
+chapters, ordered core-first, with agent findings inline on the lines they
+concern. You mark each finding agree, disagree, or unsure, with a reason, and
+add your own comments. "Discuss in T3" copies a prompt for that finding to the
+clipboard. Publishing shows a preview first and then posts one combined
+GitHub review.
+
+- The review pins the head commit that the agents read, so its lines match
+  that commit.
+- Re-run starts a new session for the same PR. Your verdicts, marks, and
+  comments carry over; a verdict applies again when the same finding returns.
+- The guide writer and the reviewer read separate worktrees; the adversarial
+  reviewer reuses the reviewer's worktree. Fork PRs are refused.
+- Agents run through the configured `AGENT` CLI, so they use your
+  subscription and not an API key.
+
+### Triage
+
+Triage decides how much review a PR needs, with rules over the PR metadata.
+It uses no model.
+
+- `skip` when only generated files, lockfiles, or documentation changed.
+- `deep` for a sensitive path (such as auth, payments, or migrations), 25 or
+  more files, or 800 or more changed lines.
+- `standard` for 6 or more files or 150 or more changed lines.
+- `light` for every other change.
+
+A `deep` triage runs the adversarial pass, even when
+`REVIEW_ADVERSARIAL_MODE` is `off`.
+
+## State
+
+Runtime state lives under `STATE_DIR` (`./state` by default) and is not
+committed. It holds the SQLite database `agent-workflows.sqlite` (guided
+review sessions, your verdicts, marks, and comments, the current account, and
+the findings that `review --post` already posted), cached bare repositories,
+and managed worktrees.
+
+- At start and once a day, the app deletes finished sessions past the newest
+  5 of a PR, or older than 30 days. A PR's newest session stays, and so does
+  a session with verdicts, marks, or comments that was never published. Each
+  edit counts as activity for the 30 days.
+- To move the app to another machine, stop it, then copy
+  `state/agent-workflows.sqlite` together with its `-wal` and `-shm` files.
+  Cached repositories and worktrees can be recreated.
+- A `review` run and the app can share one state directory. They wait on each
+  other's database and repository locks.
 
 ## Configuration
 
-| Variable                                 | Default             | Purpose                                                                         |
-| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`                           | required            | GitHub API, clone, review, comment, webhook, and push authentication.           |
-| `REPOS`                                  | required for daemon | Comma-separated `owner/repo` list.                                              |
-| `AGENT`                                  | `codex`             | `codex`, `claude-code`, or `zcode`.                                             |
-| `AGENT_SELF_USER`                        | unset               | Dedicated bot username to ignore; personal-token mode relies on the marker tag. |
-| `ALLOWED_AUTHORS`                        | unset               | Comma-separated logins allowed to trigger runs. Unset means everyone.           |
-| `HOST`                                   | `127.0.0.1`         | Webhook listener bind address.                                                  |
-| `PORT`                                   | `3773`              | Webhook listener port.                                                          |
-| `WEBHOOK_SECRET`                         | unset               | HMAC secret shared with GitHub. Required when webhooks are on.                  |
-| `PUBLIC_URL`                             | unset               | URL GitHub posts to when you own the ingress.                                   |
-| `TAILSCALE_FUNNEL`                       | `false`             | Expose `PORT` through Tailscale Funnel and derive the public URL.               |
-| `POLL_INTERVAL_SEC`                      | `300`               | Reconciliation poll interval; minimum 5 seconds.                                |
-| `MAX_CONCURRENT_RUNS`                    | `3`                 | Global cap on simultaneous agent runs.                                          |
-| `AUTO_REVIEW`                            | `false`             | Review newly opened or ready PRs and post findings.                             |
-| `COMMENT_BATCH_WINDOW_SEC`               | `10`                | Quiet debounce after the latest related comment.                                |
-| `COMMENT_BATCH_MIN_COMMENTS`             | `2`                 | Related-comment count that makes a batch eligible.                              |
-| `COMMENT_BATCH_MAX_WAIT_SEC`             | `300`               | Maximum age before a smaller batch becomes eligible; `0` disables it.           |
-| `REVIEW_ADVERSARIAL_MODE`                | `auto`              | `off`, `auto`, or `always`.                                                     |
-| `REVIEW_ADVERSARIAL_AGENT`               | same as `AGENT`     | Adapter for the verification pass.                                              |
-| `PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN` | `false`             | Replay comments visible on the first poll.                                      |
-| `STATE_DIR`                              | `./state`           | Polling state, cached repos, worktrees, and service logs.                       |
-| `KEEP_WORKDIRS`                          | `false`             | Retain worktrees for debugging.                                                 |
+| Variable                   | Default         | Purpose                                                                        |
+| -------------------------- | --------------- | ------------------------------------------------------------------------------ |
+| `GITHUB_TOKEN`             | optional        | Token for `review` and for the app when `gh` has no account.                   |
+| `AGENT`                    | `codex`         | `codex` or `claude-code`.                                                      |
+| `REVIEW_ADVERSARIAL_MODE`  | `auto`          | `off`, `auto`, or `always`. A deep triage runs the pass even when it is `off`. |
+| `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT` | Adapter for the adversarial pass.                                              |
+| `UI_HOST`                  | `127.0.0.1`     | Address the app listens on.                                                    |
+| `UI_PORT`                  | `4773`          | Port the app listens on. T3 Code uses 3773.                                    |
+| `UI_PUBLIC_PORT`           | `UI_PORT`       | Port in the browser's address, when Docker publishes another port.             |
+| `MAX_CONCURRENT_RUNS`      | `3`             | Agent processes that run at the same time. A guided run counts as 2.           |
+| `STATE_DIR`                | `./state`       | Database, cached repositories, and worktrees.                                  |
+| `KEEP_WORKDIRS`            | `false`         | Keep worktrees and run directories for debugging.                              |
+| `CODEX_BIN`                | `codex`         | Codex executable.                                                              |
+| `CLAUDE_CODE_BIN`          | `claude`        | Claude Code executable.                                                        |
+| `LOG_LEVEL`                | `info`          | `debug`, `info`, `warn`, or `error`.                                           |
 
-Retention, retry, and binary override settings are documented in
-[.env.example](.env.example).
+The variables of the removed feedback bot (`REPOS`, `POLL_INTERVAL_SEC`,
+`HOST`, `PORT`, `WEBHOOK_SECRET`, `PUBLIC_URL`, `TAILSCALE_FUNNEL`,
+`AUTO_REVIEW`, and others) are no longer read. Startup warns when one is
+still set; remove it from `.env`. The same holds for `DECISION_ENGINE`,
+`DECISION_ENGINE_URL`, `DECISION_MODEL`, and `DECISION_TIMEOUT_MS`, which
+selected the removed triage model.
 
-## Guardrails and current limitations
+## Guardrails and limits
 
-- Agents run unattended inside managed worktrees. Codex and Claude adapters use
-  their explicit permission-bypass flags; only run this on a trusted machine.
-- Comments from authors outside `ALLOWED_AUTHORS` never reach the agent. Leave
-  it unset only on private repositories.
-- A missing or invalid agent report means nothing is pushed. The worktree is
-  discarded and one summary comment says the batch was not applied.
-- Pushes use `--force-with-lease` pinned to the fetched branch SHA, so a remote
-  update causes a safe failure instead of overwriting newer work.
-- Review-only mode rejects agent file changes and posts only findings that map
-  to right-side lines in the GitHub diff.
-- Bot output carries an invisible marker and is ignored on later polls, which
-  prevents feedback loops.
-- PR automation currently supports branches in the watched repository. Events
-  from forked head repositories are dropped and never pushed.
-- Windows is not a supported service or CI target.
-- Real GitHub/model smoke tests are opt-in; normal tests use local repositories
-  and fake agent binaries and spend no tokens.
+- The app has no login. Anyone who can reach `UI_HOST:UI_PORT` can publish
+  reviews as your accounts, so it warns when `UI_HOST` is not a loopback
+  address. It accepts only its own Host and Origin and only JSON writes.
+- Agents run in managed worktrees with the Codex and Claude Code
+  permission-bypass flags. Run the app only on a trusted machine.
+- The agents only read. A run that changes files, exits nonzero, or does not
+  write a valid report after one relaunch fails, and nothing from it is
+  posted.
+- `review --post` skips findings that it already posted to the same PR and
+  findings whose lines are not in the GitHub diff.
+- Runs past `MAX_CONCURRENT_RUNS` wait with status `queued`. With
+  `MAX_CONCURRENT_RUNS=1`, the guide writer and the reviewer of one guided
+  run take turns.
+- A guided review refuses fork PRs. The `review` command refuses draft PRs.
+- Windows is not a supported platform or CI target.
 
 ## Development
 
 ```bash
 mise run deps
-mise run gate       # typecheck, lint, format, scripts, tests, build, smoke, in parallel
-mise run doctor
+mise run gate       # typecheck, lint, format, scripts, tests, smoke, web app, in parallel
 ```
 
-`mise tasks` lists every command; the gate's parts (`typecheck`,
+`mise tasks` lists every command; the parts of the gate (`typecheck`,
 `typecheck:tests`, `lint`, `format:check`, `check:scripts`, `test`,
-`test:smoke`) can be run on their own. These are the authoritative local
-verification commands and CI runs the same tasks. `mise run test` includes
-every production TypeScript file under `src/` and fails below 100% for lines,
-branches, or functions. All test tiers use local servers, temporary Git
-repositories, and fake agent binaries, so they spend no model tokens and need no
-GitHub credentials.
+`test:smoke`, `web:check`) can run on their own, and CI runs the same tasks.
+`mise run test` includes every production TypeScript file under `src/` and
+fails below 100% for lines, branches, or functions. `test:unit` and
+`test:integration` run each tier. The tests use local servers, temporary Git
+repositories, and fake agent binaries, so they spend no model tokens and need
+no GitHub credentials.
 
-Pull requests run five parallel jobs covering quality and type safety, unit
-tests, integration tests, complete coverage, and the compiled runtime. Pushes to
-`main`, manual runs, and the weekly schedule add Linux and macOS validation plus
-a production dependency audit. Keep the pull-request jobs as required branch
-protection checks; the `main` workflow is a broader post-merge safety net.
-`doctor` remains the machine-specific check for local credentials, binaries,
-and skills.
+The code is laid out as ports and adapters:
 
-The code is laid out as ports and adapters, and the extension seams are
-intentionally small:
-
-1. `src/domain/` holds pure types and decisions: events, batching, the
-   report contract, risk, and webhook normalization. No I/O.
-2. `src/services/` orchestrates: intake, polling, webhook handling, dispatch
-   lanes, feedback handling, and review. Services depend only on ports.
-3. `src/adapters/` implements the ports: agent CLIs, Git, GitHub, the HTTP
-   listener, state files, Tailscale, and service managers.
+1. `src/domain/` holds pure types and decisions: the review result contract,
+   the guide, triage, risk, the inbox, and how a review is published. No I/O.
+2. `src/services/` orchestrates: guided runs, the review API, GitHub access
+   per account, the run dispatcher, and the `review` command. Services depend
+   only on ports.
+3. `src/adapters/` implements the ports: agent CLIs, Git, GitHub and `gh`,
+   the HTTP server, and SQLite state.

@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import {
   DomainError,
   DraftPullRequestError,
-  InvalidTargetError,
-  PushRejectedError,
   ReportInvalidError,
   ReportMissingError,
 } from "../../src/domain/errors.js";
@@ -26,16 +24,11 @@ test("ReportMissingError carries the missing report path", () => {
   assert.equal(error.path, "/tmp/report.json");
 });
 
-test("ReportInvalidError and InvalidTargetError keep their own names and messages", () => {
+test("ReportInvalidError keeps its own name and message", () => {
   const invalid = new ReportInvalidError("bad report");
   assert.ok(invalid instanceof DomainError);
   assert.equal(invalid.name, "ReportInvalidError");
   assert.equal(invalid.message, "bad report");
-
-  const target = new InvalidTargetError("bad target");
-  assert.ok(target instanceof DomainError);
-  assert.equal(target.name, "InvalidTargetError");
-  assert.equal(target.message, "bad target");
 });
 
 test("DraftPullRequestError explains that review mode needs a ready PR", () => {
@@ -46,14 +39,4 @@ test("DraftPullRequestError explains that review mode needs a ready PR", () => {
     error.message,
     "PR owner/repo#7 is a draft; review mode only runs on ready-for-review PRs.",
   );
-});
-
-test("PushRejectedError names the branch and keeps the git failure as cause", () => {
-  const cause = new Error("stale info");
-  const error = new PushRejectedError("feature", { cause });
-  assert.ok(error instanceof DomainError);
-  assert.equal(error.name, "PushRejectedError");
-  assert.equal(error.message, "push of feature rejected: remote branch moved");
-  assert.equal(error.branch, "feature");
-  assert.equal(error.cause, cause);
 });

@@ -3,57 +3,23 @@ import { resolve } from "node:path";
 import { log } from "./log.js";
 import type { ReviewAdversarialMode } from "./domain/risk.js";
 
-export interface RepoSpec {
-  owner: string;
-  repo: string;
-}
-
 export type { ReviewAdversarialMode };
 
 export interface Config {
-  githubToken: string;
-  repos: RepoSpec[];
-  pollIntervalSec: number;
-  commentBatchWindowSec: number;
-  commentBatchMinComments: number;
-  commentBatchMaxWaitSec: number;
-  prContextHistoryLimit: number;
-  commentBatchHistoryLimit: number;
-  processedCommentKeyLimit: number;
-  agentRetryDelaySec: number;
-  agentMaxAttempts: number;
+  /** Unset when gh's accounts are the only credentials. */
+  githubToken: string | undefined;
   agent: string;
   reviewAdversarialMode: ReviewAdversarialMode;
   reviewAdversarialAgent: string;
-  processExistingCommentsOnFirstRun: boolean;
-  agentSelfUser: string | null;
-  allowedAuthors: string[] | null;
   stateDir: string;
-  zcodeBin: string;
   claudeCodeBin: string;
   codexBin: string;
   keepWorkdirs: boolean;
-  host: string;
-  port: number;
-  webhookSecret: string | null;
-  publicUrl: string | null;
-  tailscaleFunnel: boolean;
   maxConcurrentRuns: number;
-  autoReview: boolean;
-}
-
-export interface LoadConfigOptions {
-  requireRepos?: boolean;
-}
-
-function required(name: string): string {
-  const v = process.env[name];
-  if (!v || v.trim() === "") {
-    throw new Error(
-      `Missing required env var ${name}. Copy .env.example to .env and fill it in.`,
-    );
-  }
-  return v.trim();
+  uiHost: string;
+  uiPort: number;
+  /** The port in the browser's address; UI_PORT unless Docker maps another. */
+  uiPublicPort: number;
 }
 
 function optional(name: string, fallback: string): string {
@@ -61,159 +27,109 @@ function optional(name: string, fallback: string): string {
   return v && v.trim() !== "" ? v.trim() : fallback;
 }
 
-function parseRepos(raw: string): RepoSpec[] {
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((slug) => {
-      const parts = slug.split("/");
-      if (parts.length !== 2 || !parts[0] || !parts[1]) {
-        throw new Error(`Invalid repo slug "${slug}" — expected "owner/repo".`);
-      }
-      return { owner: parts[0], repo: parts[1] };
+/** Every numeric setting goes through here, so all share one error form. */
+function integer(
+  name: string,
+  fallback: string,
+  rule: { min: number; max?: number },
+): number {
+  const { min, max } = rule;
+  const value = Number(optional(name, fallback));
+  if (
+    Number.isInteger(value) &&
+    value >= min &&
+    (max === undefined || value <= max)
+  )
+    return value;
+  const bound = max === undefined ? `>= ${min}` : `between ${min} and ${max}`;
+  throw new Error(`${name} must be an integer ${bound}.`);
+}
+
+/** Variables that earlier versions read; setting one has no effect now. */
+export const RETIRED_VARIABLES = [
+  // The feedback bot: polling, webhooks, comment batching, and its service.
+  "REPOS",
+  "POLL_INTERVAL_SEC",
+  "COMMENT_BATCH_WINDOW_SEC",
+  "AGENT_MAX_ATTEMPTS",
+  "PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN",
+  "AGENT_SELF_USER",
+  "ALLOWED_AUTHORS",
+  "HOST",
+  "PORT",
+  "WEBHOOK_SECRET",
+  "PUBLIC_URL",
+  "TAILSCALE_FUNNEL",
+  "AUTO_REVIEW",
+  "COMMENT_BATCH_HISTORY_LIMIT",
+  "PR_CONTEXT_HISTORY_LIMIT",
+  "PROCESSED_COMMENT_KEY_LIMIT",
+  "COMMENT_BATCH_MIN_COMMENTS",
+  "COMMENT_BATCH_MAX_WAIT_SEC",
+  "AGENT_RETRY_DELAY_SEC",
+  "ZCODE_BIN",
+  // The Clef decision engine.
+  "DECISION_ENGINE",
+  "DECISION_ENGINE_URL",
+  "DECISION_MODEL",
+  "DECISION_TIMEOUT_MS",
+];
+
+/** Each command loads the config once, so this warns once at startup. */
+function warnRetired(): void {
+  const set = RETIRED_VARIABLES.filter((name) => process.env[name]);
+  if (set.length > 0)
+    log.warn("these variables are no longer read; remove them from .env", {
+      variables: set,
     });
 }
 
-function parseList(raw: string): string[] | null {
-  const items = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length > 0 ? items : null;
+/** ZCode support was removed, so an old .env must fail with the fix. */
+function agentName(name: string, fallback: string): string {
+  const value = optional(name, fallback);
+  if (value === "zcode")
+    throw new Error(
+      `${name}=zcode: ZCode support was removed. Set ${name} to codex or claude-code.`,
+    );
+  return value;
 }
 
-export function loadConfig(options: LoadConfigOptions = {}): Config {
-  const requireRepos = options.requireRepos ?? true;
-  const rawRepos = process.env.REPOS?.trim() ?? "";
-  const agent = optional("AGENT", "codex");
+export function loadConfig(): Config {
+  warnRetired();
+  const agent = agentName("AGENT", "codex");
   const reviewAdversarialMode = optional("REVIEW_ADVERSARIAL_MODE", "auto");
   if (!isReviewAdversarialMode(reviewAdversarialMode)) {
     throw new Error(
       "REVIEW_ADVERSARIAL_MODE must be one of: off, auto, always.",
     );
   }
+  const uiPort = integer("UI_PORT", "4773", { min: 1, max: 65535 });
   const cfg: Config = {
-    githubToken: required("GITHUB_TOKEN"),
-    repos: rawRepos === "" ? [] : parseRepos(rawRepos),
-    pollIntervalSec: Number(optional("POLL_INTERVAL_SEC", "300")),
-    commentBatchWindowSec: Number(optional("COMMENT_BATCH_WINDOW_SEC", "10")),
-    commentBatchMinComments: Number(
-      optional("COMMENT_BATCH_MIN_COMMENTS", "2"),
-    ),
-    commentBatchMaxWaitSec: Number(
-      optional("COMMENT_BATCH_MAX_WAIT_SEC", "300"),
-    ),
-    prContextHistoryLimit: Number(optional("PR_CONTEXT_HISTORY_LIMIT", "5")),
-    commentBatchHistoryLimit: Number(
-      optional("COMMENT_BATCH_HISTORY_LIMIT", "20"),
-    ),
-    processedCommentKeyLimit: Number(
-      optional("PROCESSED_COMMENT_KEY_LIMIT", "2000"),
-    ),
-    agentRetryDelaySec: Number(optional("AGENT_RETRY_DELAY_SEC", "1800")),
-    agentMaxAttempts: Number(optional("AGENT_MAX_ATTEMPTS", "5")),
+    githubToken: optional("GITHUB_TOKEN", "") || undefined,
     agent,
     reviewAdversarialMode,
-    reviewAdversarialAgent: optional("REVIEW_ADVERSARIAL_AGENT", agent),
-    processExistingCommentsOnFirstRun:
-      optional("PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN", "false") === "true",
-    agentSelfUser: optional("AGENT_SELF_USER", "") || null,
-    allowedAuthors: parseList(optional("ALLOWED_AUTHORS", "")),
+    reviewAdversarialAgent: agentName("REVIEW_ADVERSARIAL_AGENT", agent),
     stateDir: resolve(optional("STATE_DIR", "./state")),
-    zcodeBin: optional("ZCODE_BIN", "zcode"),
     claudeCodeBin: optional("CLAUDE_CODE_BIN", "claude"),
     codexBin: optional("CODEX_BIN", "codex"),
     keepWorkdirs: optional("KEEP_WORKDIRS", "false") === "true",
-    host: optional("HOST", "127.0.0.1"),
-    port: Number(optional("PORT", "3773")),
-    webhookSecret: optional("WEBHOOK_SECRET", "") || null,
-    publicUrl: optional("PUBLIC_URL", "") || null,
-    tailscaleFunnel: optional("TAILSCALE_FUNNEL", "false") === "true",
-    maxConcurrentRuns: Number(optional("MAX_CONCURRENT_RUNS", "3")),
-    autoReview: optional("AUTO_REVIEW", "false") === "true",
+    maxConcurrentRuns: integer("MAX_CONCURRENT_RUNS", "3", { min: 1 }),
+    uiHost: optional("UI_HOST", "127.0.0.1"),
+    uiPort,
+    uiPublicPort: integer("UI_PUBLIC_PORT", String(uiPort), {
+      min: 1,
+      max: 65535,
+    }),
   };
 
-  if (!Number.isFinite(cfg.pollIntervalSec) || cfg.pollIntervalSec < 5) {
-    throw new Error("POLL_INTERVAL_SEC must be a number >= 5.");
-  }
-  if (
-    !Number.isFinite(cfg.commentBatchWindowSec) ||
-    cfg.commentBatchWindowSec < 0
-  ) {
-    throw new Error("COMMENT_BATCH_WINDOW_SEC must be a number >= 0.");
-  }
-  if (
-    !Number.isInteger(cfg.commentBatchMinComments) ||
-    cfg.commentBatchMinComments < 1
-  ) {
-    throw new Error("COMMENT_BATCH_MIN_COMMENTS must be an integer >= 1.");
-  }
-  if (
-    !Number.isFinite(cfg.commentBatchMaxWaitSec) ||
-    cfg.commentBatchMaxWaitSec < 0
-  ) {
-    throw new Error("COMMENT_BATCH_MAX_WAIT_SEC must be a number >= 0.");
-  }
-  if (
-    !Number.isInteger(cfg.prContextHistoryLimit) ||
-    cfg.prContextHistoryLimit < 0
-  ) {
-    throw new Error("PR_CONTEXT_HISTORY_LIMIT must be an integer >= 0.");
-  }
-  if (
-    !Number.isInteger(cfg.commentBatchHistoryLimit) ||
-    cfg.commentBatchHistoryLimit < 0
-  ) {
-    throw new Error("COMMENT_BATCH_HISTORY_LIMIT must be an integer >= 0.");
-  }
-  if (
-    !Number.isInteger(cfg.processedCommentKeyLimit) ||
-    cfg.processedCommentKeyLimit < 0
-  ) {
-    throw new Error("PROCESSED_COMMENT_KEY_LIMIT must be an integer >= 0.");
-  }
-  if (!Number.isFinite(cfg.agentRetryDelaySec) || cfg.agentRetryDelaySec < 0) {
-    throw new Error("AGENT_RETRY_DELAY_SEC must be a number >= 0.");
-  }
-  if (!Number.isInteger(cfg.agentMaxAttempts) || cfg.agentMaxAttempts < 1) {
-    throw new Error("AGENT_MAX_ATTEMPTS must be an integer >= 1.");
-  }
-  if (!Number.isInteger(cfg.port) || cfg.port < 1 || cfg.port > 65535) {
-    throw new Error("PORT must be an integer between 1 and 65535.");
-  }
-  if (!Number.isInteger(cfg.maxConcurrentRuns) || cfg.maxConcurrentRuns < 1) {
-    throw new Error("MAX_CONCURRENT_RUNS must be an integer >= 1.");
-  }
-  if (
-    cfg.publicUrl !== null &&
-    !cfg.publicUrl.startsWith("https://") &&
-    !cfg.publicUrl.startsWith("http://")
-  ) {
-    throw new Error("PUBLIC_URL must start with https:// or http://.");
-  }
-  if ((cfg.publicUrl !== null || cfg.tailscaleFunnel) && !cfg.webhookSecret) {
-    throw new Error("WEBHOOK_SECRET is required when webhooks are enabled.");
-  }
-  if (requireRepos && cfg.repos.length === 0) {
-    throw new Error("REPOS must list at least one owner/repo.");
-  }
-
   log.info("config loaded", {
-    repos: cfg.repos.map((r) => `${r.owner}/${r.repo}`),
     agent: cfg.agent,
     reviewAdversarialMode: cfg.reviewAdversarialMode,
     reviewAdversarialAgent: cfg.reviewAdversarialAgent,
-    processExistingCommentsOnFirstRun: cfg.processExistingCommentsOnFirstRun,
-    pollIntervalSec: cfg.pollIntervalSec,
-    commentBatchWindowSec: cfg.commentBatchWindowSec,
-    commentBatchMinComments: cfg.commentBatchMinComments,
-    commentBatchMaxWaitSec: cfg.commentBatchMaxWaitSec,
-    prContextHistoryLimit: cfg.prContextHistoryLimit,
-    agentRetryDelaySec: cfg.agentRetryDelaySec,
-    agentMaxAttempts: cfg.agentMaxAttempts,
-    allowedAuthors: cfg.allowedAuthors,
     stateDir: cfg.stateDir,
+    uiHost: cfg.uiHost,
+    uiPort: cfg.uiPort,
+    uiPublicPort: cfg.uiPublicPort,
   });
   return cfg;
 }

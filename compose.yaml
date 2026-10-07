@@ -1,0 +1,38 @@
+# The guided review app at http://127.0.0.1:4773. The README's "Run with
+# Docker" section has the one-time setup.
+#
+# HOST_PORT  host port, on 127.0.0.1 only (default 4773)
+# SKILLS_DIR host directory that holds pr-reviewer/SKILL.md, mounted read-only
+#            as the agents' skill directory (default ../vstack/skills)
+services:
+  app:
+    build: .
+    image: agent-workflows:local
+    # Reaps the agent CLIs' child processes and forwards SIGTERM to the app.
+    init: true
+    restart: unless-stopped
+    ports:
+      # The app has no login: never publish it beyond loopback.
+      - "127.0.0.1:${HOST_PORT:-4773}:4773"
+    env_file:
+      - path: docker.env
+        required: false
+    # These match the port and the volumes below, so docker.env cannot change them.
+    environment:
+      UI_HOST: 0.0.0.0
+      UI_PORT: "4773"
+      UI_PUBLIC_PORT: ${HOST_PORT:-4773}
+      STATE_DIR: /var/lib/agent-workflows
+    volumes:
+      - state:/var/lib/agent-workflows
+      - gh-config:/home/node/.config/gh
+      - claude-config:/home/node/.claude
+      - codex-home:/home/node/.codex
+      - ${SKILLS_DIR:-../vstack/skills}:/home/node/.claude/skills:ro
+      - ${SKILLS_DIR:-../vstack/skills}:/home/node/.agents/skills:ro
+
+volumes:
+  state:
+  gh-config:
+  claude-config:
+  codex-home:

@@ -1,22 +1,23 @@
 import { mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  AgentAdapter,
-  AgentRunInput,
-} from "../adapters/agent/agent.interface.js";
+import type { AgentAdapter } from "../adapters/agent/agent.interface.js";
 import type { Config, ReviewAdversarialMode } from "../config.js";
 import type { GitPort, WorkdirHandle } from "../adapters/git/git.interface.js";
 import type { GitHubPort } from "../adapters/github/github.interface.js";
 import type { StateFactory } from "../adapters/state/state.interface.js";
-import { MARKER_TAG } from "../domain/batching.js";
 import { log } from "../log.js";
 import { buildReviewPrompt } from "./review-prompt.js";
-import { findingFingerprint, parseReviewResult } from "../domain/decisions.js";
+import {
+  MARKER_TAG,
+  findingFingerprint,
+  parseReviewResult,
+} from "../domain/decisions.js";
 import type { ReviewFinding, ReviewResult } from "../domain/decisions.js";
 import { DraftPullRequestError, ReportMissingError } from "../domain/errors.js";
 import { filterPostableFindings } from "../domain/patch-lines.js";
 import { decideAdversarialReview } from "../domain/risk.js";
-import type { ReviewContext, ReviewTarget } from "../domain/events.js";
+import { errorMessage } from "../domain/util.js";
+import type { ReviewContext, ReviewTarget } from "../domain/pull-request.js";
 
 export interface ReviewOptions {
   config: Config;
@@ -31,6 +32,8 @@ export interface ReviewOptions {
   adversarialMode?: ReviewAdversarialMode;
   target: ReviewTarget;
   post: boolean;
+  /** Clones and fetches the PR; GITHUB_TOKEN or gh's active account. */
+  token: string;
   cloneUrlOverride?: string;
 }
 
@@ -82,52 +85,21 @@ export async function reviewPullRequest(
       stateDir: config.stateDir,
       repo: target.repo,
       branch: pr.headRef,
+      baseBranch: pr.baseRef,
       taskId: `review:${target.repo.owner}/${target.repo.repo}:pr:${target.prNumber}`,
-      token: config.githubToken,
+      token: options.token,
       cloneUrlOverride: options.cloneUrlOverride,
     });
-    const primaryReportPath = join(runDir, "primary-report.json");
-    const primaryReview = await runReviewAgent({
+    const passes = await runReviewPasses({
       git,
-      agent,
+      ctx: reviewContext,
       workdir: workdir.path,
-      branch: pr.headRef,
-      reportPath: primaryReportPath,
-      prompt: buildReviewPrompt(reviewContext, primaryReportPath),
-      label: "Primary review",
+      runDir,
+      agent,
+      adversarialAgent: options.adversarialAgent,
+      mode: options.adversarialMode ?? config.reviewAdversarialMode,
     });
-    const adversarialDecision = decideAdversarialReview(
-      options.adversarialMode ?? config.reviewAdversarialMode,
-      reviewContext,
-      primaryReview,
-    );
-    const adversarialRan =
-      adversarialDecision.run && options.adversarialAgent !== undefined;
-    if (adversarialDecision.run && !options.adversarialAgent) {
-      log.warn(
-        "adversarial review requested but no adversarial agent was provided",
-        {
-          slug,
-          reasons: adversarialDecision.reasons,
-        },
-      );
-    }
-    const adversarialReportPath = join(runDir, "adversarial-report.json");
-    const review = adversarialRan
-      ? await runReviewAgent({
-          git,
-          agent: options.adversarialAgent!,
-          workdir: workdir.path,
-          branch: pr.headRef,
-          reportPath: adversarialReportPath,
-          prompt: buildReviewPrompt(reviewContext, adversarialReportPath, {
-            role: "adversarial",
-            primaryReview,
-            includePatches: false,
-          }),
-          label: "Adversarial review",
-        })
-      : primaryReview;
+    const { review, adversarialRan } = passes;
     const repoState = options.state(target.repo);
     const postedKeys = new Set(
       repoState.getPostedReviewFindingKeys(target.prNumber),
@@ -175,22 +147,11 @@ export async function reviewPullRequest(
       });
     }
 
-    if (post) {
-      repoState.recordReviewRun({
-        prNumber: target.prNumber,
-        postedFindingKeys: postableFindings.map(findingFingerprint),
-        entry: {
-          reviewedAt: new Date().toISOString(),
-          agent: adversarialRan
-            ? `${agent.name}->${options.adversarialAgent!.name}`
-            : agent.name,
-          findingCount: review.findings.length,
-          postedFindingCount: postableFindings.length,
-          dryRun: false,
-          summary: review.summary,
-        },
-      });
-    }
+    if (post)
+      repoState.recordPostedFindings(
+        target.prNumber,
+        postableFindings.map(findingFingerprint),
+      );
 
     return {
       target,
@@ -200,7 +161,7 @@ export async function reviewPullRequest(
       skippedDuplicateFindings,
       skippedUnpostableFindings,
       adversarialRan,
-      adversarialReasons: adversarialDecision.reasons,
+      adversarialReasons: passes.reasons,
     };
   } finally {
     if (workdir) git.cleanupWorkdir(workdir, config.keepWorkdirs);
@@ -208,11 +169,87 @@ export async function reviewPullRequest(
   }
 }
 
+export interface ReviewPassesArgs {
+  git: GitPort;
+  ctx: ReviewContext;
+  workdir: string;
+  runDir: string;
+  agent: AgentAdapter;
+  adversarialAgent: AgentAdapter | undefined;
+  mode: ReviewAdversarialMode;
+  /** Runs the adversarial pass whatever the mode decides. */
+  force?: boolean;
+  includePatches?: boolean;
+  /** Returns the primary review with the error instead of throwing. */
+  keepPrimaryOnFailure?: boolean;
+}
+
+export interface ReviewPasses {
+  review: ReviewResult;
+  adversarialRan: boolean;
+  reasons: string[];
+  /** Why a kept-primary adversarial pass failed; null when it did not. */
+  adversarialError: string | null;
+}
+
+/**
+ * Runs the primary review, then the adversarial review when the mode or
+ * `force` asks for it. Both read the same worktree: the primary passed the
+ * read-only check, so the checkout is still clean when the second starts.
+ */
+export async function runReviewPasses(
+  args: ReviewPassesArgs,
+): Promise<ReviewPasses> {
+  const { ctx, runDir } = args;
+  const base = { git: args.git, workdir: args.workdir, branch: ctx.headRef };
+  const primaryPath = join(runDir, "primary-report.json");
+  const primary = await runReviewAgent({
+    ...base,
+    agent: args.agent,
+    reportPath: primaryPath,
+    prompt: buildReviewPrompt(ctx, primaryPath, {
+      includePatches: args.includePatches,
+    }),
+    label: "Primary review",
+  });
+  const { run, reasons } = decideAdversarialReview(args.mode, ctx, primary);
+  const skipped = { review: primary, adversarialRan: false, reasons };
+  if (!run && !args.force) return { ...skipped, adversarialError: null };
+  if (!args.adversarialAgent) {
+    log.warn(
+      "adversarial review requested but no adversarial agent was provided",
+      { pr: `${ctx.repo.owner}/${ctx.repo.repo}#${ctx.prNumber}`, reasons },
+    );
+    return { ...skipped, adversarialError: null };
+  }
+  const adversarialPath = join(runDir, "adversarial-report.json");
+  try {
+    const review = await runReviewAgent({
+      ...base,
+      agent: args.adversarialAgent,
+      reportPath: adversarialPath,
+      prompt: buildReviewPrompt(ctx, adversarialPath, {
+        role: "adversarial",
+        primaryReview: primary,
+        includePatches: false,
+      }),
+      label: "Adversarial review",
+    });
+    return { review, adversarialRan: true, reasons, adversarialError: null };
+  } catch (err) {
+    if (!args.keepPrimaryOnFailure) throw err;
+    log.warn("adversarial review failed; keeping the primary review", {
+      error: errorMessage(err),
+    });
+    return { ...skipped, adversarialError: errorMessage(err) };
+  }
+}
+
 function buildMissingReportPrompt(reportPath: string): string {
   return `Your review report at ${reportPath} is missing. Write it now following the pr-reviewer skill's output schema. Change nothing else.`;
 }
 
-async function runReviewAgent(args: {
+export interface ReportAgentArgs {
   git: GitPort;
   agent: AgentAdapter;
   workdir: string;
@@ -220,12 +257,33 @@ async function runReviewAgent(args: {
   prompt: string;
   reportPath: string;
   label: string;
-}): Promise<ReviewResult> {
+}
+
+/** Runs a read-only review agent and parses its report with the pr-reviewer schema. */
+export function runReviewAgent(args: ReportAgentArgs): Promise<ReviewResult> {
+  return runReportAgent({
+    ...args,
+    missingPrompt: buildMissingReportPrompt(args.reportPath),
+    parse: parseReviewResult,
+  });
+}
+
+/**
+ * Runs a read-only agent that must write a report file: relaunches once with
+ * `missingPrompt` if the report is absent, refuses the run if the agent
+ * modified the checkout, and parses the report with `parse`.
+ */
+export async function runReportAgent<T>(
+  args: ReportAgentArgs & {
+    missingPrompt: string;
+    parse: (text: string) => T;
+  },
+): Promise<T> {
   const { git, reportPath, label } = args;
   // A kept run dir from an earlier attempt must not satisfy this run's report.
   rmSync(reportPath, { force: true });
   const launch = async (prompt: string): Promise<string> => {
-    const result = await runAgent(args.agent, {
+    const result = await args.agent.run({
       workdir: args.workdir,
       branch: args.branch,
       prompt,
@@ -237,7 +295,7 @@ async function runReviewAgent(args: {
     }
     if (git.hasUncommittedChanges(args.workdir)) {
       throw new Error(
-        `${label} agent modified files during review-only mode; refusing to post.`,
+        `${label} agent modified files during review-only mode; refusing its report.`,
       );
     }
     return result.stderr;
@@ -245,34 +303,18 @@ async function runReviewAgent(args: {
 
   let stderr = await launch(args.prompt);
   if (!existsSync(reportPath)) {
-    log.warn("review report missing, relaunching once", { reportPath, label });
-    stderr = await launch(buildMissingReportPrompt(reportPath));
+    log.warn("report missing, relaunching once", { reportPath, label });
+    stderr = await launch(args.missingPrompt);
     if (!existsSync(reportPath)) throw new ReportMissingError(reportPath);
   }
   try {
-    return parseReviewResult(readFileSync(reportPath, "utf8"));
+    return args.parse(readFileSync(reportPath, "utf8"));
   } catch (err) {
     throw new Error(
       `Failed to parse ${label.toLowerCase()} agent output: ${String(err)}. stderr tail: ${stderr.slice(-1000)}`,
       { cause: err },
     );
   }
-}
-
-/** Runs the agent in the prepared workdir and returns the result. */
-async function runAgent(
-  agent: AgentAdapter,
-  input: AgentRunInput,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  log.info("running agent", { agent: agent.name, workdir: input.workdir });
-  const res = await agent.run(input);
-  log.info("agent finished", {
-    agent: agent.name,
-    exitCode: res.exitCode,
-    stdoutTail: res.stdout.slice(-200),
-    stderrTail: res.stderr.slice(-500),
-  });
-  return res;
 }
 
 function formatFindingComment(finding: ReviewFinding): string {

@@ -31,7 +31,7 @@ pnpm review owner/repo#123 --no-adversarial
 
 - Fetches the PR title, body, branch info, and changed files.
 - Creates an isolated worktree for the PR branch.
-- Runs the configured `AGENT` (`zcode`, `claude-code`, `codex`, etc.).
+- Runs the configured `AGENT` (`codex` or `claude-code`).
 - Launches the agent with the `pr-reviewer` skill from vstack and reads the findings from a report file the agent writes.
 - In `auto` mode, runs a fresh adversarial reviewer for large or sensitive diffs and high-severity primary findings.
 - Asks for actionable review findings only.
@@ -54,4 +54,4 @@ pnpm review owner/repo#123 --no-adversarial
 
 `REVIEW_ADVERSARIAL_AGENT` selects the adapter for that pass and defaults to `AGENT`. A different provider gives stronger independence; the same provider still runs in a fresh process and context.
 
-`REPOS` is only required for daemon polling. Review mode can target any PR your `GITHUB_TOKEN` can access.
+Review mode can target any PR your `GITHUB_TOKEN` can access.

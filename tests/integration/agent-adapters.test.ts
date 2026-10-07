@@ -10,10 +10,18 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { claudeCodeAdapter } from "../../src/adapters/agent/claude-code.js";
-import { codexAdapter } from "../../src/adapters/agent/codex.js";
-import { zcodeAdapter } from "../../src/adapters/agent/zcode.js";
+import {
+  OUTPUT_TAIL_CHARS,
+  cliAgent,
+} from "../../src/adapters/agent/cli-agent.js";
+import { getAgent } from "../../src/adapters/agent/registry.js";
 import type { AgentAdapter } from "../../src/adapters/agent/agent.interface.js";
+import type { Config } from "../../src/config.js";
+
+/** The registry reads only the binary paths from the config. */
+function agentFor(name: string, binary: string): AgentAdapter {
+  return getAgent(name, { codexBin: binary, claudeCodeBin: binary } as Config);
+}
 
 interface Capture {
   argv: string[];
@@ -79,7 +87,7 @@ test("codex adapter invokes codex exec with prompt on stdin", async () => {
   try {
     const { binary, capturePath } = makeFakeBinary(root);
     const capture = await runAdapter({
-      adapter: codexAdapter({ binary }),
+      adapter: agentFor("codex", binary),
       capturePath,
       workdir: root,
     });
@@ -98,33 +106,12 @@ test("codex adapter invokes codex exec with prompt on stdin", async () => {
   }
 });
 
-test("zcode adapter invokes zcode print mode with prompt on stdin", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-workflows-fake-zcode-"));
-  try {
-    const { binary, capturePath } = makeFakeBinary(root);
-    const capture = await runAdapter({
-      adapter: zcodeAdapter({ binary }),
-      capturePath,
-      workdir: root,
-    });
-
-    assert.deepEqual(capture.argv, [
-      "--print",
-      "--dangerously-skip-permissions",
-    ]);
-    assert.equal(capture.cwd, realpathSync(root));
-    assert.equal(capture.stdin, "review prompt");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("claude-code adapter invokes claude print mode with prompt on stdin", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-fake-claude-"));
   try {
     const { binary, capturePath } = makeFakeBinary(root);
     const capture = await runAdapter({
-      adapter: claudeCodeAdapter({ binary }),
+      adapter: agentFor("claude-code", binary),
       capturePath,
       workdir: root,
     });
@@ -137,7 +124,7 @@ test("claude-code adapter invokes claude print mode with prompt on stdin", async
   }
 });
 
-test("all adapters report spawn errors and signal exits without invoking a real agent", async () => {
+test("the CLI agent reports spawn errors and signal exits without invoking a real agent", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-agent-errors-"));
   try {
     const signalBinary = join(root, "signal-agent.js");
@@ -146,25 +133,42 @@ test("all adapters report spawn errors and signal exits without invoking a real 
       "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n",
     );
     chmodSync(signalBinary, 0o755);
-    const factories = [codexAdapter, zcodeAdapter, claudeCodeAdapter];
-    for (const factory of factories) {
-      const missing = await factory({
-        binary: join(root, "does-not-exist"),
-      }).run({
+    const run = (binary: string) =>
+      cliAgent({ name: "fake", binary, args: [] }).run({
         workdir: root,
         branch: "feature",
         prompt: "prompt",
       });
-      assert.equal(missing.exitCode, -1);
-      assert.match(missing.stderr, /ENOENT/);
+    const missing = await run(join(root, "does-not-exist"));
+    assert.equal(missing.exitCode, -1);
+    assert.match(missing.stderr, /ENOENT/);
+    assert.equal((await run(signalBinary)).exitCode, -1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
-      const signaled = await factory({ binary: signalBinary }).run({
-        workdir: root,
-        branch: "feature",
-        prompt: "prompt",
-      });
-      assert.equal(signaled.exitCode, -1);
-    }
+test("the CLI agent keeps only the tail of a long output", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-workflows-agent-tail-"));
+  try {
+    const binary = join(root, "loud-agent.js");
+    writeFileSync(
+      binary,
+      `#!/usr/bin/env node
+process.stdout.write("a".repeat(${OUTPUT_TAIL_CHARS}) + "end");
+process.stderr.write("b".repeat(${OUTPUT_TAIL_CHARS}) + "err");
+`,
+    );
+    chmodSync(binary, 0o755);
+    const result = await cliAgent({ name: "loud", binary, args: [] }).run({
+      workdir: root,
+      branch: "feature",
+      prompt: "",
+    });
+    assert.equal(result.stdout.length, OUTPUT_TAIL_CHARS);
+    assert.ok(result.stdout.endsWith("aend"));
+    assert.equal(result.stderr.length, OUTPUT_TAIL_CHARS);
+    assert.ok(result.stderr.endsWith("berr"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

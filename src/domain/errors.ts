@@ -10,15 +10,6 @@ export class ReportMissingError extends DomainError {
   }
 }
 export class ReportInvalidError extends DomainError {}
-/** The remote branch moved since the worktree was fetched; the lease held. */
-export class PushRejectedError extends DomainError {
-  constructor(
-    public readonly branch: string,
-    options?: ErrorOptions,
-  ) {
-    super(`push of ${branch} rejected: remote branch moved`, options);
-  }
-}
 export class DraftPullRequestError extends DomainError {
   constructor(slug: string) {
     super(
@@ -26,4 +17,11 @@ export class DraftPullRequestError extends DomainError {
     );
   }
 }
-export class InvalidTargetError extends DomainError {}
+/** GitHub refused a request because the account hit a rate limit. */
+export class RateLimitedError extends DomainError {}
+/** The server stopped, so a run must not write to the closed database. */
+export class ServerStoppedError extends DomainError {
+  constructor() {
+    super("the server stopped during this run");
+  }
+}

@@ -1,19 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig, type Config } from "../../src/config.js";
+import {
+  loadConfig,
+  RETIRED_VARIABLES,
+  type Config,
+} from "../../src/config.js";
 import {
   GitHubClient,
-  MARKER_TAG,
   type GitHubApi,
 } from "../../src/adapters/github/octokit.js";
-import type { GitPort } from "../../src/adapters/git/git.interface.js";
 import { getAgent } from "../../src/adapters/agent/registry.js";
-import { sqliteState } from "../../src/adapters/state/sqlite.js";
-import type { RepoRef } from "../../src/domain/events.js";
+import { ghAccounts } from "../../src/adapters/github/accounts.js";
+import { openStateDatabase } from "../../src/adapters/state/sqlite.js";
+import {
+  SESSIONS_KEPT_PER_PR,
+  sqliteReviewSessions,
+} from "../../src/adapters/state/review-sessions.js";
+import { reviewApi, type ReviewApi } from "../../src/services/review-api.js";
 import { createLogger } from "../../src/log.js";
 import {
   defaultCliDependencies,
@@ -22,10 +34,12 @@ import {
   runCli,
   runEntryPoint,
   runReviewCommand,
-  runWebhooksCommand,
+  runStartCommand,
   type CliDependencies,
 } from "../../src/main.js";
-import type { ServiceManagerPort } from "../../src/adapters/service/service.interface.js";
+import { sqliteSettings } from "../../src/adapters/state/settings.js";
+import { githubAccess } from "../../src/services/github-access.js";
+import { fakeAccounts, fakeClient } from "../fakes/github.js";
 import type {
   ReviewRunResult,
   ReviewOptions,
@@ -33,33 +47,18 @@ import type {
 
 const CONFIG_KEYS = [
   "GITHUB_TOKEN",
-  "REPOS",
-  "POLL_INTERVAL_SEC",
-  "COMMENT_BATCH_WINDOW_SEC",
-  "COMMENT_BATCH_MIN_COMMENTS",
-  "COMMENT_BATCH_MAX_WAIT_SEC",
-  "PR_CONTEXT_HISTORY_LIMIT",
-  "COMMENT_BATCH_HISTORY_LIMIT",
-  "PROCESSED_COMMENT_KEY_LIMIT",
-  "AGENT_RETRY_DELAY_SEC",
-  "AGENT_MAX_ATTEMPTS",
   "AGENT",
   "REVIEW_ADVERSARIAL_MODE",
   "REVIEW_ADVERSARIAL_AGENT",
-  "PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN",
-  "AGENT_SELF_USER",
   "STATE_DIR",
-  "ZCODE_BIN",
   "CLAUDE_CODE_BIN",
   "CODEX_BIN",
   "KEEP_WORKDIRS",
-  "HOST",
-  "PORT",
-  "WEBHOOK_SECRET",
-  "PUBLIC_URL",
-  "TAILSCALE_FUNNEL",
   "MAX_CONCURRENT_RUNS",
-  "AUTO_REVIEW",
+  "UI_HOST",
+  "UI_PORT",
+  "UI_PUBLIC_PORT",
+  ...RETIRED_VARIABLES,
 ] as const;
 
 function withEnv(
@@ -88,139 +87,69 @@ function withEnv(
 function makeConfig(root = tmpdir()): Config {
   return {
     githubToken: "test-token",
-    repos: [{ owner: "owner", repo: "repo" }],
-    pollIntervalSec: 5,
-    commentBatchWindowSec: 0,
-    commentBatchMinComments: 1,
-    commentBatchMaxWaitSec: 0,
-    prContextHistoryLimit: 5,
-    commentBatchHistoryLimit: 20,
-    processedCommentKeyLimit: 2000,
-    agentRetryDelaySec: 0,
-    agentMaxAttempts: 5,
     agent: "codex",
     reviewAdversarialMode: "auto",
     reviewAdversarialAgent: "claude-code",
-    processExistingCommentsOnFirstRun: false,
-    agentSelfUser: null,
-    allowedAuthors: null,
     stateDir: join(root, "state"),
-    zcodeBin: "zcode-test",
     claudeCodeBin: "claude-test",
     codexBin: "codex-test",
     keepWorkdirs: false,
-    host: "127.0.0.1",
-    port: 3773,
-    webhookSecret: null,
-    publicUrl: null,
-    tailscaleFunnel: false,
     maxConcurrentRuns: 3,
-    autoReview: false,
+    uiHost: "127.0.0.1",
+    uiPort: 4773,
+    uiPublicPort: 4773,
   };
 }
 
-test("loadConfig parses defaults, explicit values, repositories, and optional daemon repos", () => {
-  withEnv(
-    { GITHUB_TOKEN: " token ", REPOS: " owner/one, ,owner/two ", AGENT: " " },
-    () => {
-      const config = loadConfig();
-      assert.equal(config.githubToken, "token");
-      assert.deepEqual(config.repos, [
-        { owner: "owner", repo: "one" },
-        { owner: "owner", repo: "two" },
-      ]);
-      assert.equal(config.agent, "codex");
-      assert.equal(config.reviewAdversarialAgent, "codex");
-      assert.equal(config.agentSelfUser, null);
-      assert.equal(config.allowedAuthors, null);
-      assert.equal(config.processExistingCommentsOnFirstRun, false);
-      assert.equal(config.keepWorkdirs, false);
-      assert.equal(config.stateDir, resolve("./state"));
-      assert.equal(config.pollIntervalSec, 300);
-      assert.equal(config.host, "127.0.0.1");
-      assert.equal(config.port, 3773);
-      assert.equal(config.webhookSecret, null);
-      assert.equal(config.publicUrl, null);
-      assert.equal(config.tailscaleFunnel, false);
-      assert.equal(config.maxConcurrentRuns, 3);
-      assert.equal(config.autoReview, false);
-    },
-  );
+test("loadConfig parses defaults and explicit values", () => {
+  withEnv({ GITHUB_TOKEN: " token ", AGENT: " " }, () => {
+    const config = loadConfig();
+    assert.equal(config.githubToken, "token");
+    assert.equal(config.agent, "codex");
+    assert.equal(config.reviewAdversarialMode, "auto");
+    assert.equal(config.reviewAdversarialAgent, "codex");
+    assert.equal(config.keepWorkdirs, false);
+    assert.equal(config.stateDir, resolve("./state"));
+    assert.equal(config.claudeCodeBin, "claude");
+    assert.equal(config.codexBin, "codex");
+    assert.equal(config.maxConcurrentRuns, 3);
+    assert.equal(config.uiHost, "127.0.0.1");
+    assert.equal(config.uiPort, 4773);
+    assert.equal(config.uiPublicPort, 4773);
+  });
 
   const root = mkdtempSync(join(tmpdir(), "agent-workflows-config-"));
   try {
     withEnv(
       {
         GITHUB_TOKEN: "token",
-        REPOS: "owner/repo",
-        POLL_INTERVAL_SEC: "5",
-        COMMENT_BATCH_WINDOW_SEC: "0",
-        COMMENT_BATCH_MIN_COMMENTS: "3",
-        COMMENT_BATCH_MAX_WAIT_SEC: "1.5",
-        PR_CONTEXT_HISTORY_LIMIT: "0",
-        COMMENT_BATCH_HISTORY_LIMIT: "0",
-        PROCESSED_COMMENT_KEY_LIMIT: "0",
-        AGENT_RETRY_DELAY_SEC: "0",
-        AGENT_MAX_ATTEMPTS: "1",
-        AGENT: "zcode",
+        AGENT: "claude-code",
         REVIEW_ADVERSARIAL_MODE: "always",
-        REVIEW_ADVERSARIAL_AGENT: "claude-code",
-        PROCESS_EXISTING_COMMENTS_ON_FIRST_RUN: "true",
-        AGENT_SELF_USER: " bot ",
-        ALLOWED_AUTHORS: "alice, Bob",
+        REVIEW_ADVERSARIAL_AGENT: "codex",
         STATE_DIR: root,
-        ZCODE_BIN: " z ",
         CLAUDE_CODE_BIN: " c ",
         CODEX_BIN: " x ",
         KEEP_WORKDIRS: "true",
-        HOST: "0.0.0.0",
-        PORT: "8080",
-        WEBHOOK_SECRET: "s3cret",
-        PUBLIC_URL: "https://hooks.example.com",
-        TAILSCALE_FUNNEL: "true",
         MAX_CONCURRENT_RUNS: "1",
-        AUTO_REVIEW: "true",
+        UI_HOST: "0.0.0.0",
+        UI_PORT: "9000",
+        UI_PUBLIC_PORT: "4793",
       },
       () => {
-        const config = loadConfig({ requireRepos: true });
-        assert.equal(config.commentBatchMinComments, 3);
-        assert.equal(config.commentBatchMaxWaitSec, 1.5);
-        assert.equal(config.reviewAdversarialMode, "always");
-        assert.equal(config.reviewAdversarialAgent, "claude-code");
-        assert.equal(config.agentSelfUser, "bot");
-        assert.deepEqual(config.allowedAuthors, ["alice", "Bob"]);
-        assert.equal(config.processExistingCommentsOnFirstRun, true);
-        assert.equal(config.keepWorkdirs, true);
-        assert.equal(config.zcodeBin, "z");
-        assert.equal(config.host, "0.0.0.0");
-        assert.equal(config.port, 8080);
-        assert.equal(config.webhookSecret, "s3cret");
-        assert.equal(config.publicUrl, "https://hooks.example.com");
-        assert.equal(config.tailscaleFunnel, true);
-        assert.equal(config.maxConcurrentRuns, 1);
-        assert.equal(config.autoReview, true);
-      },
-    );
-    withEnv(
-      { GITHUB_TOKEN: "token", REPOS: "", REVIEW_ADVERSARIAL_MODE: "off" },
-      () => {
-        assert.deepEqual(loadConfig({ requireRepos: false }).repos, []);
-      },
-    );
-    withEnv({ GITHUB_TOKEN: "token" }, () => {
-      assert.deepEqual(loadConfig({ requireRepos: false }).repos, []);
-    });
-    withEnv(
-      {
-        GITHUB_TOKEN: "token",
-        PUBLIC_URL: "http://localhost:3773",
-        WEBHOOK_SECRET: "s",
-      },
-      () => {
-        assert.equal(
-          loadConfig({ requireRepos: false }).publicUrl,
-          "http://localhost:3773",
-        );
+        assert.deepEqual(loadConfig(), {
+          githubToken: "token",
+          agent: "claude-code",
+          reviewAdversarialMode: "always",
+          reviewAdversarialAgent: "codex",
+          stateDir: root,
+          claudeCodeBin: "c",
+          codexBin: "x",
+          keepWorkdirs: true,
+          maxConcurrentRuns: 1,
+          uiHost: "0.0.0.0",
+          uiPort: 9000,
+          uiPublicPort: 4793,
+        });
       },
     );
   } finally {
@@ -228,176 +157,66 @@ test("loadConfig parses defaults, explicit values, repositories, and optional da
   }
 });
 
-test("loadConfig rejects every invalid required, repository, enum, and numeric value", () => {
+test("loadConfig rejects the removed ZCode agent", () => {
+  const base = { GITHUB_TOKEN: "x" };
+  const cases: Array<[Record<string, string>, RegExp]> = [
+    [{ ...base, AGENT: "zcode" }, /AGENT=zcode: ZCode support was removed/],
+    [
+      { ...base, REVIEW_ADVERSARIAL_AGENT: "zcode" },
+      /REVIEW_ADVERSARIAL_AGENT=zcode: ZCode support was removed/,
+    ],
+  ];
+  for (const [env, message] of cases)
+    withEnv(env, () => assert.throws(() => loadConfig(), message));
+});
+
+test("loadConfig warns about retired variables that are still set, without failing", () => {
+  const original = console.warn;
+  const warnings: string[] = [];
+  console.warn = (line: string) => {
+    warnings.push(line);
+  };
+  try {
+    const base = { GITHUB_TOKEN: "x" };
+    withEnv(base, () => loadConfig());
+    assert.deepEqual(warnings, []);
+    // Values the feedback bot would have rejected no longer matter.
+    withEnv(
+      {
+        ...base,
+        ZCODE_BIN: "zcode",
+        REPOS: "not-a-slug",
+        PORT: "4773",
+        TAILSCALE_FUNNEL: "true",
+        DECISION_ENGINE: "magic",
+        DECISION_TIMEOUT_MS: "1",
+      },
+      () => loadConfig(),
+    );
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /no longer read/);
+    assert.match(warnings[0], /"REPOS","PORT","TAILSCALE_FUNNEL","ZCODE_BIN"/);
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("loadConfig leaves GITHUB_TOKEN unset when it is missing or blank, for gh's accounts", () => {
+  for (const env of [{}, { GITHUB_TOKEN: "   " }]) {
+    withEnv(env, () => assert.equal(loadConfig().githubToken, undefined));
+  }
+});
+
+test("loadConfig rejects every invalid enum and numeric value", () => {
   const cases: Array<[Record<string, string | undefined>, RegExp]> = [
-    [{ REPOS: "owner/repo" }, /GITHUB_TOKEN/],
-    [{ GITHUB_TOKEN: "   ", REPOS: "owner/repo" }, /GITHUB_TOKEN/],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner" }, /Invalid repo slug/],
-    [{ GITHUB_TOKEN: "x", REPOS: "/repo" }, /Invalid repo slug/],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner/" }, /Invalid repo slug/],
-    [{ GITHUB_TOKEN: "x", REPOS: "a/b/c" }, /Invalid repo slug/],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        REVIEW_ADVERSARIAL_MODE: "sometimes",
-      },
-      /must be one of/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", POLL_INTERVAL_SEC: "NaN" },
-      /POLL_INTERVAL_SEC/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", POLL_INTERVAL_SEC: "4" },
-      /POLL_INTERVAL_SEC/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_WINDOW_SEC: "NaN",
-      },
-      /COMMENT_BATCH_WINDOW_SEC/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_WINDOW_SEC: "-1",
-      },
-      /COMMENT_BATCH_WINDOW_SEC/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_MIN_COMMENTS: "1.5",
-      },
-      /COMMENT_BATCH_MIN_COMMENTS/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_MIN_COMMENTS: "0",
-      },
-      /COMMENT_BATCH_MIN_COMMENTS/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_MAX_WAIT_SEC: "NaN",
-      },
-      /COMMENT_BATCH_MAX_WAIT_SEC/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_MAX_WAIT_SEC: "-1",
-      },
-      /COMMENT_BATCH_MAX_WAIT_SEC/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PR_CONTEXT_HISTORY_LIMIT: "1.5",
-      },
-      /PR_CONTEXT_HISTORY_LIMIT/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PR_CONTEXT_HISTORY_LIMIT: "-1",
-      },
-      /PR_CONTEXT_HISTORY_LIMIT/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_HISTORY_LIMIT: "1.5",
-      },
-      /COMMENT_BATCH_HISTORY_LIMIT/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        COMMENT_BATCH_HISTORY_LIMIT: "-1",
-      },
-      /COMMENT_BATCH_HISTORY_LIMIT/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PROCESSED_COMMENT_KEY_LIMIT: "1.5",
-      },
-      /PROCESSED_COMMENT_KEY_LIMIT/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PROCESSED_COMMENT_KEY_LIMIT: "-1",
-      },
-      /PROCESSED_COMMENT_KEY_LIMIT/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", AGENT_RETRY_DELAY_SEC: "NaN" },
-      /AGENT_RETRY_DELAY_SEC/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", AGENT_RETRY_DELAY_SEC: "-1" },
-      /AGENT_RETRY_DELAY_SEC/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", AGENT_MAX_ATTEMPTS: "1.5" },
-      /AGENT_MAX_ATTEMPTS/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", AGENT_MAX_ATTEMPTS: "0" },
-      /AGENT_MAX_ATTEMPTS/,
-    ],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "NaN" }, /PORT/],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "80.5" }, /PORT/],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "0" }, /PORT/],
-    [{ GITHUB_TOKEN: "x", REPOS: "owner/repo", PORT: "65536" }, /PORT/],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", MAX_CONCURRENT_RUNS: "1.5" },
-      /MAX_CONCURRENT_RUNS/,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", MAX_CONCURRENT_RUNS: "0" },
-      /MAX_CONCURRENT_RUNS/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PUBLIC_URL: "ftp://example.com",
-        WEBHOOK_SECRET: "s",
-      },
-      /PUBLIC_URL must start with/,
-    ],
-    [
-      {
-        GITHUB_TOKEN: "x",
-        REPOS: "owner/repo",
-        PUBLIC_URL: "https://example.com",
-      },
-      /WEBHOOK_SECRET is required when webhooks are enabled\./,
-    ],
-    [
-      { GITHUB_TOKEN: "x", REPOS: "owner/repo", TAILSCALE_FUNNEL: "true" },
-      /WEBHOOK_SECRET is required when webhooks are enabled\./,
-    ],
-    [{ GITHUB_TOKEN: "x", REPOS: "" }, /REPOS must list/],
+    [{ GITHUB_TOKEN: "x", REVIEW_ADVERSARIAL_MODE: "sometimes" }, /one of/],
+    [{ GITHUB_TOKEN: "x", MAX_CONCURRENT_RUNS: "1.5" }, /MAX_CONCURRENT_RUNS/],
+    [{ GITHUB_TOKEN: "x", MAX_CONCURRENT_RUNS: "0" }, /MAX_CONCURRENT_RUNS/],
+    [{ GITHUB_TOKEN: "x", MAX_CONCURRENT_RUNS: "NaN" }, /MAX_CONCURRENT_RUNS/],
+    [{ GITHUB_TOKEN: "x", UI_PORT: "0" }, /UI_PORT must be an integer/],
+    [{ GITHUB_TOKEN: "x", UI_PORT: "80.5" }, /UI_PORT/],
+    [{ GITHUB_TOKEN: "x", UI_PORT: "70000" }, /between 1 and 65535/],
+    [{ UI_PUBLIC_PORT: "0" }, /UI_PUBLIC_PORT must be an integer between/],
   ];
   for (const [env, expected] of cases) {
     withEnv(env, () => assert.throws(() => loadConfig(), expected));
@@ -406,68 +225,16 @@ test("loadConfig rejects every invalid required, repository, enum, and numeric v
 
 function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
   return {
+    graphql: async () => {
+      throw new Error("graphql is not faked here");
+    },
     rest: {
+      users: {
+        getAuthenticated: async () => ({
+          data: { login: "me", avatar_url: null },
+        }),
+      },
       pulls: {
-        list: async (args: unknown) => {
-          calls.push(["list", args]);
-          return {
-            data: [
-              {
-                number: 1,
-                title: "One",
-                body: null,
-                head: { ref: "head" },
-                base: { ref: "base" },
-                draft: undefined,
-              },
-              {
-                number: 2,
-                title: "Two",
-                body: "body",
-                head: { ref: "h2", repo: { full_name: "fork/repo" } },
-                base: { ref: "b2", repo: { full_name: "owner/repo" } },
-                draft: true,
-              },
-              {
-                number: 6,
-                title: "Six",
-                body: null,
-                head: { ref: "h6", repo: null },
-                base: { ref: "b6", repo: { full_name: "owner/repo" } },
-                draft: false,
-              },
-            ],
-          };
-        },
-        listReviewComments: async (args: unknown) => {
-          calls.push(["review-comments", args]);
-          return {
-            data: [
-              {
-                id: 3,
-                user: null,
-                body: null,
-                path: "a.ts",
-                line: undefined,
-                original_line: undefined,
-                diff_hunk: "@@",
-                created_at: "2020-01-01T00:00:00Z",
-                pull_request_review_id: undefined,
-              },
-              {
-                id: 4,
-                user: { login: "reviewer" },
-                body: "fix",
-                path: "b.ts",
-                line: 8,
-                original_line: 7,
-                diff_hunk: "@@",
-                created_at: "2021-01-01T00:00:00Z",
-                pull_request_review_id: 9,
-              },
-            ],
-          };
-        },
         get: async (args: unknown) => {
           calls.push(["get", args]);
           return {
@@ -475,8 +242,8 @@ function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
               number: 5,
               title: "PR",
               body: null,
-              head: { ref: "feature", repo: { full_name: "owner/repo" } },
-              base: { ref: "main", repo: { full_name: "owner/repo" } },
+              head: { ref: "feature" },
+              base: { ref: "main" },
               draft: undefined,
             },
           };
@@ -484,85 +251,6 @@ function fakeGitHub(calls: Array<[string, unknown]>): GitHubApi {
         listFiles: async () => ({ data: [] }),
         createReview: async (args: unknown) => {
           calls.push(["create-review", args]);
-        },
-        createReplyForReviewComment: async (args: unknown) => {
-          calls.push(["reply", args]);
-        },
-      },
-      issues: {
-        listComments: async (args: unknown) => {
-          calls.push(["issue-comments", args]);
-          return {
-            data: [
-              {
-                id: 1,
-                user: null,
-                body: null,
-                created_at: "2020-01-01T00:00:00Z",
-              },
-              {
-                id: 2,
-                user: { login: "author" },
-                body: "hello",
-                created_at: "2021-01-01T00:00:00Z",
-              },
-            ],
-          };
-        },
-        createComment: async (args: unknown) => {
-          calls.push(["create-comment", args]);
-        },
-      },
-      repos: {
-        listWebhooks: async (args: unknown) => {
-          calls.push(["list-hooks", args]);
-          return {
-            data: [
-              {
-                id: 1,
-                events: ["issue_comment"],
-                active: true,
-                config: { url: "https://x.test/hook" },
-              },
-              { id: 2, events: [], active: false },
-            ],
-          };
-        },
-        createWebhook: async (args: unknown) => {
-          calls.push(["create-hook", args]);
-          return {
-            data: {
-              id: 3,
-              events: ["pull_request"],
-              active: true,
-              config: { url: "https://x.test/new" },
-            },
-          };
-        },
-        updateWebhook: async (args: unknown) => {
-          calls.push(["update-hook", args]);
-          return {
-            data: {
-              id: 3,
-              events: ["pull_request"],
-              active: true,
-              config: { url: "https://x.test/new" },
-            },
-          };
-        },
-        listWebhookDeliveries: async (args: unknown) => {
-          calls.push(["hook-deliveries", args]);
-          return {
-            data: [
-              {
-                id: 10,
-                event: "ping",
-                status_code: 200,
-                delivered_at: "2021-01-01T00:00:00Z",
-                redelivery: false,
-              },
-            ],
-          };
         },
       },
     },
@@ -593,60 +281,6 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
   const fake = fakeGitHub(calls);
   const client = new GitHubClient("unused", { octokit: fake });
   const ref = { owner: "owner", repo: "repo" };
-  assert.equal(MARKER_TAG, "<!-- agent-workflows:bot -->");
-  assert.deepEqual(await client.listOpenPRs(ref), [
-    {
-      repo: ref,
-      number: 1,
-      title: "One",
-      body: null,
-      headRef: "head",
-      baseRef: "base",
-      draft: false,
-      fromFork: true,
-    },
-    {
-      repo: ref,
-      number: 2,
-      title: "Two",
-      body: "body",
-      headRef: "h2",
-      baseRef: "b2",
-      draft: true,
-      fromFork: true,
-    },
-    {
-      repo: ref,
-      number: 6,
-      title: "Six",
-      body: null,
-      headRef: "h6",
-      baseRef: "b6",
-      draft: false,
-      fromFork: true,
-    },
-  ]);
-  assert.equal((await client.listIssueComments(ref, 3)).length, 2);
-  assert.deepEqual((await client.listIssueComments(ref, 3))[1], {
-    id: 2,
-    author: "author",
-    body: "hello",
-    createdAt: "2021-01-01T00:00:00Z",
-  });
-  const allReviews = await client.listReviewComments(ref, 3);
-  assert.deepEqual(allReviews[0], {
-    id: 3,
-    author: "unknown",
-    body: "",
-    path: "a.ts",
-    line: null,
-    originalLine: null,
-    diffHunk: "@@",
-    createdAt: "2020-01-01T00:00:00Z",
-    reviewId: null,
-  });
-  assert.equal(allReviews[1].reviewId, 9);
-  await client.createComment(ref, 3, "body");
   assert.deepEqual(await client.getPullRequest(ref, 5), {
     repo: ref,
     number: 5,
@@ -655,7 +289,11 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     headRef: "feature",
     baseRef: "main",
     draft: false,
-    fromFork: false,
+  });
+  assert.deepEqual(calls.find(([name]) => name === "get")?.[1], {
+    owner: "owner",
+    repo: "repo",
+    pull_number: 5,
   });
   assert.deepEqual(await client.listPullRequestFiles(ref, 5), [
     {
@@ -673,18 +311,22 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
     body: "summary",
     comments: [{ path: "a.ts", line: 2, body: "finding" }],
   });
-  assert.deepEqual(calls.find(([name]) => name === "list")?.[1], {
-    owner: "owner",
-    repo: "repo",
-    state: "open",
-    per_page: 100,
+  await client.createPullRequestReview({
+    repo: ref,
+    prNumber: 5,
+    body: "approved",
+    comments: [],
+    event: "APPROVE",
+    commitId: "abc123",
   });
-  assert.deepEqual(calls.find(([name]) => name === "create-comment")?.[1], {
-    owner: "owner",
-    repo: "repo",
-    issue_number: 3,
-    body: "body",
-  });
+  const approval = calls.filter(
+    ([name]) => name === "create-review",
+  )[1]?.[1] as {
+    event: string;
+    commit_id: string;
+  };
+  assert.equal(approval.event, "APPROVE");
+  assert.equal(approval.commit_id, "abc123");
   assert.deepEqual(calls.find(([name]) => name === "create-review")?.[1], {
     owner: "owner",
     repo: "repo",
@@ -696,86 +338,10 @@ test("GitHubClient normalizes responses and sends exact Octokit arguments", asyn
   assert.ok(new GitHubClient("token").octokit);
 });
 
-test("github client passes review replies and webhook operations through", async () => {
-  const calls: Array<[string, unknown]> = [];
-  const github = fakeGitHub(calls);
-  const client = new GitHubClient("unused", { octokit: github });
-  const ref = { owner: "owner", repo: "repo" };
-  const hookArgs = { url: "https://x.test/new", secret: "s", events: ["a"] };
-  const hookBody = {
-    events: ["a"],
-    active: true,
-    config: { url: "https://x.test/new", content_type: "json", secret: "s" },
-  };
-  const argsFor = (name: string) => calls.find(([n]) => n === name)?.[1];
-
-  await client.replyToReviewComment(ref, 5, 77, "thanks");
-  assert.deepEqual(argsFor("reply"), {
-    owner: "owner",
-    repo: "repo",
-    pull_number: 5,
-    comment_id: 77,
-    body: "thanks",
-  });
-
-  assert.deepEqual(await client.listHooks(ref), [
-    {
-      id: 1,
-      url: "https://x.test/hook",
-      events: ["issue_comment"],
-      active: true,
-    },
-    { id: 2, url: "", events: [], active: false },
-  ]);
-  assert.deepEqual(argsFor("list-hooks"), {
-    owner: "owner",
-    repo: "repo",
-    per_page: 100,
-  });
-
-  const created = await client.createHook(ref, hookArgs);
-  assert.deepEqual(created, {
-    id: 3,
-    url: "https://x.test/new",
-    events: ["pull_request"],
-    active: true,
-  });
-  assert.deepEqual(argsFor("create-hook"), {
-    owner: "owner",
-    repo: "repo",
-    ...hookBody,
-  });
-
-  await client.updateHook(ref, 3, hookArgs);
-  assert.deepEqual(argsFor("update-hook"), {
-    owner: "owner",
-    repo: "repo",
-    hook_id: 3,
-    ...hookBody,
-  });
-
-  assert.deepEqual(await client.listHookDeliveries(ref, 3), [
-    {
-      id: 10,
-      event: "ping",
-      statusCode: 200,
-      deliveredAt: "2021-01-01T00:00:00Z",
-      redelivery: false,
-    },
-  ]);
-  assert.deepEqual(argsFor("hook-deliveries"), {
-    owner: "owner",
-    repo: "repo",
-    hook_id: 3,
-    per_page: 30,
-  });
-});
-
 test("agent registry routes known entries and rejects unknown agents", () => {
   const config = makeConfig();
   assert.equal(getAgent("codex", config).name, "codex");
   assert.equal(getAgent("claude-code", config).name, "claude-code");
-  assert.equal(getAgent("zcode", config).name, "zcode");
   assert.throws(() => getAgent("missing", config), /Unknown agent adapter/);
 });
 
@@ -806,88 +372,32 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
   const calls: string[] = [];
   const config = makeConfig();
   const dependencies: CliDependencies = {
-    loadConfig: (options) => {
-      calls.push(`config:${options.requireRepos}`);
+    loadConfig: () => {
+      calls.push("config");
       return config;
     },
     createClient: () => ({}) as GitHubClient,
+    accounts: () => fakeAccounts(["alice"]),
     getAgent: (name) => ({
       name,
       async run() {
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     }),
-    createPoll: () => async () => [],
-    createDaemon: () => ({
-      async start() {
-        calls.push("started");
-      },
-      async stop() {
-        calls.push("stopped");
-      },
-      dispatchEvents() {},
-      async idle() {},
-    }),
     reviewPullRequest: async () => {
       calls.push("reviewed");
       return reviewResult();
     },
-    tailscale: {
-      async funnelOn() {
-        calls.push("funnelOn");
-        return "https://box.ts.net";
+    startReviewServer: async (args) => ({
+      url: `http://${args.host}:${args.port}`,
+      close: async () => {
+        calls.push("server-closed");
       },
-      async funnelOff() {
-        calls.push("funnelOff");
-      },
-      async currentUrl() {
-        calls.push("currentUrl");
-        return "https://box.ts.net";
-      },
+    }),
+    every: () => () => {
+      calls.push("prune-stopped");
     },
-    fileExists: () => true,
-    serviceManager: {
-      name: "systemd",
-      unitPath: () => "/units/aw.service",
-      render: () => "",
-      async install(spec) {
-        calls.push(
-          `service-install:${spec.label}:${spec.entryPath}:${spec.logDir}`,
-        );
-        return "/units/aw.service";
-      },
-      async uninstall() {
-        calls.push("service-uninstall");
-      },
-    } satisfies ServiceManagerPort,
-    installWebhooks: async ({ publicUrl }) => [
-      {
-        repo: { owner: "owner", repo: "repo" },
-        action: "created",
-        hookId: 123,
-        url: `${publicUrl}/webhooks/github`,
-      },
-    ],
-    webhookStatus: async ({ publicUrl }) => [
-      {
-        repo: { owner: "owner", repo: "repo" },
-        hookId: 5,
-        url: `${publicUrl}/webhooks/github`,
-        deliveries: Array.from({ length: 12 }, (_, i) => ({
-          id: i,
-          event: "issue_comment",
-          statusCode: 202,
-          deliveredAt: `2026-10-02T00:00:${String(i).padStart(2, "0")}Z`,
-          redelivery: false,
-        })),
-      },
-      {
-        repo: { owner: "owner", repo: "other" },
-        hookId: null,
-        url: "",
-        deliveries: [],
-      },
-    ],
+    shutdownGraceMs: 1_000,
     onSignal: (signal, listener) => {
       signals.set(signal, listener);
     },
@@ -902,7 +412,7 @@ function fakeCli(overrides: Partial<CliDependencies> = {}): {
   return { dependencies, lines, signals, calls };
 }
 
-test("CLI help, daemon routing, signal lifecycle, and entrypoint fatal handling are deterministic", async () => {
+test("CLI help, start routing, signal lifecycle, and entrypoint fatal handling are deterministic", async () => {
   for (const flag of ["--help", "-h", "help"]) {
     const fake = fakeCli();
     await runCli([flag], fake.dependencies);
@@ -913,19 +423,31 @@ test("CLI help, daemon routing, signal lifecycle, and entrypoint fatal handling 
     await runCli(["review", flag], fake.dependencies);
     assert.match(fake.lines[0], /Commands:/);
   }
-  const daemon = fakeCli();
-  await runCli([], daemon.dependencies);
-  assert.deepEqual(daemon.calls.slice(0, 2), ["config:true", "started"]);
-  daemon.signals.get("SIGINT")?.();
-  await new Promise((done) => setImmediate(done));
-  daemon.signals.get("SIGTERM")?.();
-  await new Promise((done) => setImmediate(done));
-  assert.deepEqual(daemon.calls.slice(-4), [
-    "stopped",
-    "exit:0",
-    "stopped",
-    "exit:0",
-  ]);
+  // `start` is the default command and `ui` is its old name.
+  for (const [args, first, second] of [
+    [[], "SIGINT", "SIGTERM"],
+    [["start"], "SIGTERM", "SIGINT"],
+    [["ui"], "SIGINT", "SIGTERM"],
+  ] as const) {
+    const app = fakeCli();
+    await runCli([...args], app.dependencies);
+    assert.deepEqual(app.calls, ["config"]);
+    assert.deepEqual(app.lines, ["Guided review: http://127.0.0.1:4773"]);
+    app.signals.get(first)?.();
+    await new Promise((done) => setImmediate(done));
+    // A second signal during shutdown does not start a second shutdown.
+    app.signals.get(second)?.();
+    await new Promise((done) => setImmediate(done));
+    assert.deepEqual(app.calls.slice(1), [
+      "prune-stopped",
+      "server-closed",
+      "exit:0",
+    ]);
+  }
+  await assert.rejects(
+    runCli(["webhooks", "install"], fakeCli().dependencies),
+    /^Error: Unknown command: webhooks$/,
+  );
   const routedReview = fakeCli();
   await runCli(["review", "owner/repo#7"], routedReview.dependencies);
   assert.ok(routedReview.calls.includes("reviewed"));
@@ -1030,6 +552,11 @@ test("review CLI validates flags, selects adversarial policy, and prints every r
     ],
   );
 
+  assert.deepEqual(
+    observed.map((item) => item.token),
+    ["test-token", "test-token", "test-token"],
+  );
+
   const lines: string[] = [];
   printReviewResult(
     reviewResult({
@@ -1058,207 +585,54 @@ test("review CLI validates flags, selects adversarial policy, and prints every r
   assert.match(help[0], /agent-workflows/);
 });
 
+test("review without GITHUB_TOKEN clones and reads the PR as gh's active account", async () => {
+  const config = { ...makeConfig(), githubToken: undefined };
+  const clients: string[] = [];
+  const observed: ReviewOptions[] = [];
+  const fake = fakeCli({
+    loadConfig: () => config,
+    accounts: () => fakeAccounts(["von", "alice"]),
+    createClient: (token) => {
+      clients.push(token);
+      return {} as GitHubClient;
+    },
+    reviewPullRequest: async (options) => {
+      observed.push(options);
+      return reviewResult();
+    },
+  });
+  await runReviewCommand(["owner/repo#7"], fake.dependencies);
+  assert.deepEqual(clients, ["token:von"]);
+  assert.equal(observed[0].token, "token:von");
+
+  const noAccount = fakeCli({
+    loadConfig: () => config,
+    accounts: (_, lookupUser) =>
+      ghAccounts({
+        fallbackToken: undefined,
+        exec: async () => "[]",
+        lookupUser,
+      }),
+  });
+  await assert.rejects(
+    runReviewCommand(["owner/repo#7"], noAccount.dependencies),
+    /GITHUB_TOKEN is not set; run gh auth login/,
+  );
+});
+
 test("default CLI factories construct local runtime objects without external calls", async () => {
   const config = makeConfig();
   const client = defaultCliDependencies.createClient("token");
   const agent = defaultCliDependencies.getAgent("codex", config);
-  const poll = defaultCliDependencies.createPoll({
-    config: { ...config, repos: [] },
-    client,
-  });
-  const daemon = defaultCliDependencies.createDaemon({
-    config,
-    poll,
-    client,
-    agent,
-  });
+  const accounts = defaultCliDependencies.accounts(config, async () => ({
+    login: "unused",
+    avatarUrl: null,
+  }));
+  assert.equal(typeof accounts.token, "function");
   assert.ok(client.octokit);
   assert.equal(agent.name, "codex");
-  assert.deepEqual(await poll(), []);
-  assert.equal(typeof daemon.start, "function");
   assert.equal(typeof defaultCliDependencies.reviewPullRequest, "function");
-  assert.match(
-    defaultCliDependencies.serviceManager.name,
-    /^(launchd|systemd)$/,
-  );
-});
-
-test("default daemon wires batches to feedback handling and ready PRs to posting reviews", async () => {
-  const root = mkdtempSync(join(tmpdir(), "daemon-wire-"));
-  try {
-    for (const mode of ["auto", "off"] as const) {
-      const config = {
-        ...makeConfig(root),
-        autoReview: true,
-        reviewAdversarialMode: mode,
-      };
-      const seen: string[] = [];
-      const client = {
-        async getPullRequest() {
-          seen.push("review");
-          throw new Error("stop review");
-        },
-        async createComment() {
-          seen.push("comment");
-        },
-        async replyToReviewComment() {},
-      } as unknown as GitHubClient;
-      const git = {
-        prepareWorkdir() {
-          seen.push("workdir");
-          throw new Error("stop feedback");
-        },
-      } as unknown as GitPort;
-      const daemon = defaultCliDependencies.createDaemon({
-        config,
-        poll: async () => [],
-        client,
-        agent: defaultCliDependencies.getAgent("codex", config),
-        git,
-      });
-      const repo = { owner: "owner", repo: "repo" };
-      daemon.dispatchEvents(
-        [
-          {
-            kind: "pull_request_ready",
-            pr: {
-              repo,
-              number: 7,
-              title: "t",
-              body: null,
-              headRef: "h",
-              baseRef: "main",
-              draft: false,
-              fromFork: false,
-            },
-          },
-        ],
-        [
-          {
-            repo,
-            prNumber: 7,
-            prTitle: "t",
-            prBody: null,
-            headRef: "h",
-            baseRef: "main",
-            batchId: `b-${mode}`,
-            groupKey: "g",
-            firstSeenAt: "",
-            lastSeenAt: "",
-            attempts: 0,
-            comments: [],
-          },
-        ],
-      );
-      await daemon.idle();
-      assert.ok(seen.includes("review"), mode);
-      assert.ok(seen.includes("workdir"), mode);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("default daemon serves webhooks only when a public route is configured, through the shared state", async () => {
-  const root = mkdtempSync(join(tmpdir(), "daemon-hooks-"));
-  const original = console.log;
-  const lines: string[] = [];
-  console.log = (line: string) => {
-    lines.push(line);
-  };
-  try {
-    const cases: Array<[Partial<Config>, boolean]> = [
-      [{}, false],
-      [{ publicUrl: "https://hooks.example" }, true],
-      [{ tailscaleFunnel: true }, true],
-    ];
-    for (const [over, enabled] of cases) {
-      lines.length = 0;
-      const config: Config = {
-        ...makeConfig(root),
-        webhookSecret: "s",
-        port: 0,
-        // No ready batch, so feedback handling never opens state on its own.
-        allowedAuthors: ["someone-else"],
-        ...over,
-      };
-      const opened: RepoRef[] = [];
-      const shared = sqliteState(config);
-      const daemon = defaultCliDependencies.createDaemon({
-        config,
-        poll: async () => [],
-        client: {} as GitHubClient,
-        agent: defaultCliDependencies.getAgent("codex", config),
-        git: {
-          prepareWorkdir() {
-            throw new Error("stop feedback");
-          },
-        } as unknown as GitPort,
-        state: (repo) => {
-          opened.push(repo);
-          return shared(repo);
-        },
-      });
-      await daemon.start();
-      try {
-        const url = /"url":"([^"]+)"/.exec(
-          lines.find((line) => line.includes("webhook listener started")) ?? "",
-        )?.[1];
-        assert.equal(url !== undefined, enabled, JSON.stringify(over));
-        if (!url) continue;
-        const body = JSON.stringify({
-          action: "created",
-          repository: { name: "repo", owner: { login: "owner" } },
-          comment: {
-            id: 5,
-            user: { login: "alice" },
-            body: "fix",
-            created_at: "2026-01-01T00:00:00Z",
-            path: "a.ts",
-            line: 3,
-            original_line: 3,
-            diff_hunk: "@@",
-            pull_request_review_id: 9,
-          },
-          pull_request: {
-            number: 4,
-            title: "T",
-            body: null,
-            draft: false,
-            head: { ref: "f", repo: { full_name: "owner/repo" } },
-            base: { ref: "main", repo: { full_name: "owner/repo" } },
-          },
-        });
-        const res = await fetch(`${url}/webhooks/github`, {
-          method: "POST",
-          headers: {
-            "x-github-delivery": `d-${JSON.stringify(over)}`,
-            "x-github-event": "pull_request_review_comment",
-            "x-hub-signature-256":
-              "sha256=" + createHmac("sha256", "s").update(body).digest("hex"),
-          },
-          body,
-        });
-        assert.equal(res.status, 202);
-        assert.deepEqual(await res.json(), { reason: "accepted" });
-        assert.deepEqual(opened, [{ owner: "owner", repo: "repo" }]);
-        await daemon.idle();
-        assert.equal(opened.length, 1);
-        // The ready check fires after the (zero-second) quiet window and
-        // re-opens the same repo's state through the shared factory.
-        await new Promise((done) => setTimeout(done, 150));
-        assert.deepEqual(opened, [
-          { owner: "owner", repo: "repo" },
-          { owner: "owner", repo: "repo" },
-        ]);
-      } finally {
-        await daemon.stop();
-      }
-    }
-  } finally {
-    console.log = original;
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(defaultCliDependencies.shutdownGraceMs, 15_000);
 });
 
 test("CLI public helpers retain safe default dependencies on validation/help paths", async () => {
@@ -1324,150 +698,544 @@ test("review severity runtime contract exposes the parser's accepted values", as
   );
 });
 
-test("webhooks CLI resolves the public URL and prints install and status lines", async () => {
-  const withUrl = { ...makeConfig(), publicUrl: "https://hooks.example.com" };
-  const install = fakeCli({ loadConfig: () => withUrl });
-  await runCli(["webhooks", "install"], install.dependencies);
-  assert.deepEqual(install.lines, [
-    "created owner/repo -> https://hooks.example.com/webhooks/github (hook 123)",
-  ]);
-
-  const status = fakeCli({ loadConfig: () => withUrl });
-  await runCli(["webhooks", "status"], status.dependencies);
-  assert.equal(status.lines.length, 13);
-  assert.equal(
-    status.lines[0],
-    "owner/repo: hook 5 https://hooks.example.com/webhooks/github",
-  );
-  assert.equal(status.lines[1], "  2026-10-02T00:00:00Z issue_comment 202");
-  assert.equal(status.lines[11], "owner/other:");
-  assert.equal(status.lines[12], "  (no hook)");
-
-  const funnel = { ...makeConfig(), tailscaleFunnel: true };
-  const viaInstall = fakeCli({ loadConfig: () => funnel });
-  await runWebhooksCommand(["install"], viaInstall.dependencies);
-  assert.ok(viaInstall.calls.includes("funnelOn"));
-  const viaStatus = fakeCli({ loadConfig: () => funnel });
-  await runWebhooksCommand(["status"], viaStatus.dependencies);
-  assert.ok(viaStatus.calls.includes("currentUrl"));
-  assert.ok(!viaStatus.calls.includes("funnelOn"));
-
-  const help = fakeCli();
-  await runCli(["webhooks", "--help"], help.dependencies);
-  assert.match(help.lines[0], /Usage:/);
-  assert.match(help.lines.join("\n"), /webhooks install\|status/);
-});
-
-test("webhooks CLI rejects unknown commands and missing exposure config", async () => {
-  await assert.rejects(
-    runCli(["webhooks", "bogus"], fakeCli().dependencies),
-    /Unknown webhooks command: bogus/,
-  );
-  await assert.rejects(
-    runCli(["webhooks"], fakeCli().dependencies),
-    /Unknown webhooks command: $/,
-  );
-  await assert.rejects(
-    runCli(["webhooks", "install"], fakeCli().dependencies),
-    /^Error: Set PUBLIC_URL or TAILSCALE_FUNNEL=true to use webhooks\.$/,
-  );
-});
-
-test("daemon turns Funnel on before start and off on shutdown, tolerating teardown errors", async () => {
-  const funnel = { ...makeConfig(), tailscaleFunnel: true };
-  const fake = fakeCli({ loadConfig: () => funnel });
-  await runCli([], fake.dependencies);
-  assert.deepEqual(fake.calls.slice(0, 2), ["funnelOn", "started"]);
-  fake.signals.get("SIGINT")?.();
-  await new Promise((done) => setImmediate(done));
-  assert.deepEqual(fake.calls.slice(-3), ["stopped", "funnelOff", "exit:0"]);
-
-  for (const thrown of [new Error("down"), "down"]) {
-    const failing = fakeCli({
-      loadConfig: () => funnel,
-      tailscale: {
-        funnelOn: async () => "https://box.ts.net",
-        funnelOff: async () => {
-          throw thrown;
+function uiCli(
+  root: string,
+  overrides: Partial<Config> = {},
+  close: () => Promise<void> = async () => {},
+) {
+  const config = { ...makeConfig(root), ...overrides };
+  const servers: Array<{
+    host: string;
+    port: number;
+    publicPort: number;
+    api: ReviewApi;
+  }> = [];
+  const fake = fakeCli({
+    loadConfig: () => {
+      fake.calls.push("config");
+      return config;
+    },
+    startReviewServer: async (args) => {
+      servers.push(args);
+      return {
+        url: `http://${args.host}:${args.port}`,
+        close: async () => {
+          fake.calls.push("server-closed");
+          await close();
         },
-        currentUrl: async () => "",
-      },
+      };
+    },
+  });
+  return { ...fake, servers, config };
+}
+
+async function settle(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !check(); i++) {
+    await new Promise((done) => setTimeout(done, 5));
+  }
+}
+
+test("start prints help and rejects unknown options", async () => {
+  for (const flag of ["--help", "-h", "help"]) {
+    const fake = uiCli(tmpdir());
+    await runCli(["start", flag], fake.dependencies);
+    assert.match(fake.lines.join("\n"), /start +Serve the guided review app/);
+    assert.deepEqual(fake.servers, []);
+  }
+  await assert.rejects(
+    runCli(["ui", "--port"], uiCli(tmpdir()).dependencies),
+    /Unknown start option: --port/,
+  );
+  await assert.rejects(
+    runStartCommand(["--port"], uiCli(tmpdir()).dependencies),
+    /Unknown start option: --port/,
+  );
+});
+
+test("start fails interrupted sessions, serves the API, runs reviews in the background, and shuts down", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-"));
+  try {
+    const seed = openStateDatabase(join(root, "state"));
+    const stuck = sqliteReviewSessions(seed).create({
+      repo: { owner: "acme", repo: "widgets" },
+      prNumber: 1,
+      agent: "codex",
+      account: "alice",
     });
-    await runCli([], failing.dependencies);
-    failing.signals.get("SIGTERM")?.();
-    await new Promise((done) => setImmediate(done));
-    assert.ok(failing.calls.includes("exit:0"));
+    seed.close();
+
+    const fake = uiCli(root);
+    await runCli(["start"], fake.dependencies);
+    assert.ok(fake.calls.includes("config"));
+    assert.deepEqual(fake.lines, ["Guided review: http://127.0.0.1:4773"]);
+    assert.equal(fake.servers.length, 1);
+    const { api, host, port } = fake.servers[0];
+    assert.equal(host, "127.0.0.1");
+    assert.equal(port, 4773);
+    assert.deepEqual(api.health(), { ok: true, agent: "codex" });
+    const interrupted = api.getSession(stuck.id).session;
+    assert.equal(interrupted.status, "failed");
+    assert.match(String(interrupted.error), /interrupted/);
+
+    // The fake GitHub client has no methods, so the background run fails
+    // and records that on the session instead of throwing.
+    const { id } = await api.createSession({ target: "acme/widgets#2" });
+    await settle(() => api.getSession(id).session.status === "failed");
+    assert.equal(api.getSession(id).session.status, "failed");
+
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+    assert.deepEqual(fake.calls.slice(-2), ["server-closed", "exit:0"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("Funnel is released when stop fails or when startup fails after funnelOn", async () => {
-  const funnel = { ...makeConfig(), tailscaleFunnel: true };
-  const stopFails = fakeCli({
-    loadConfig: () => funnel,
-    createDaemon: () => ({
-      async start() {},
-      async stop() {
-        throw new Error("stop failed");
-      },
-      dispatchEvents() {},
-      async idle() {},
-    }),
-  });
-  await runCli([], stopFails.dependencies);
-  stopFails.signals.get("SIGINT")?.();
-  await new Promise((done) => setImmediate(done));
-  assert.deepEqual(stopFails.calls.slice(-2), ["funnelOff", "exit:0"]);
+test("start queues runs past the concurrency cap and warns about a non-loopback host", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-queue-"));
+  const original = console.warn;
+  const warnings: string[] = [];
+  console.warn = (line: string) => {
+    warnings.push(line);
+  };
+  const fetches: Array<() => void> = [];
+  try {
+    const fake = uiCli(root, { maxConcurrentRuns: 1, uiHost: "0.0.0.0" });
+    fake.dependencies.createClient = () =>
+      ({
+        getPullRequestDetail: () =>
+          new Promise((_resolve, reject) => {
+            fetches.push(() => reject(new Error("offline")));
+          }),
+        listPullRequestFiles: async () => [],
+      }) as unknown as GitHubClient;
+    await runCli(["start"], fake.dependencies);
+    assert.ok(
+      warnings.some((line) => /UI_HOST is not a loopback address/.test(line)),
+    );
+    const { api } = fake.servers[0];
 
-  const startFails = fakeCli({
-    loadConfig: () => funnel,
-    tailscale: {
-      async funnelOn() {
-        throw new Error("status failed");
-      },
-      async funnelOff() {
-        startFails.calls.push("funnelOff");
-      },
-      async currentUrl() {
-        return "";
-      },
-    },
-  });
-  await assert.rejects(runCli([], startFails.dependencies), /status failed/);
-  assert.deepEqual(startFails.calls, ["funnelOff"]);
+    const first = (await api.createSession({ target: "acme/widgets#1" })).id;
+    const second = (await api.createSession({ target: "acme/widgets#2" })).id;
+    await settle(() => fetches.length === 1);
+    assert.equal(api.getSession(first).session.status, "triaging");
+    assert.equal(api.getSession(second).session.status, "queued");
+
+    fetches[0]();
+    await settle(() => fetches.length === 2);
+    assert.equal(api.getSession(first).session.status, "failed");
+    assert.equal(api.getSession(second).session.status, "triaging");
+    fetches[1]();
+    await settle(() => api.getSession(second).session.status === "failed");
+
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    console.warn = original;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("service CLI installs and uninstalls through the manager", async () => {
-  const install = fakeCli();
-  await runCli(["service", "install"], install.dependencies);
-  assert.deepEqual(install.lines, ["Installed /units/aw.service"]);
-  assert.match(
-    install.calls.join("\n"),
-    /service-install:com\.theworksofvon\.agent-workflows:.*dist.main\.js:.*logs/,
-  );
-  const remove = fakeCli();
-  await runCli(["service", "uninstall"], remove.dependencies);
-  assert.ok(remove.calls.includes("config:false"));
-  assert.ok(install.calls.includes("config:false"));
-  assert.deepEqual(remove.lines, ["Removed /units/aw.service"]);
-  assert.ok(remove.calls.includes("service-uninstall"));
-  const help = fakeCli();
-  await runCli(["service", "--help"], help.dependencies);
-  assert.match(help.lines.join("\n"), /service install\|uninstall/);
-  await assert.rejects(
-    runCli(["service", "bogus"], fakeCli().dependencies),
-    /Unknown service command: bogus/,
-  );
-  await assert.rejects(
-    runCli(["service"], fakeCli().dependencies),
-    /Unknown service command: $/,
-  );
+test("start passes the public port and exits even if the server close fails", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-s1-"));
+  const original = console.error;
+  const errors: string[] = [];
+  console.error = (line: string) => {
+    errors.push(line);
+  };
+  try {
+    const fake = uiCli(root, { uiPort: 4799, uiPublicPort: 4800 }, async () => {
+      throw new Error("close failed");
+    });
+    await runCli(["start"], fake.dependencies);
+    assert.deepEqual(fake.lines, ["Guided review: http://127.0.0.1:4799"]);
+    assert.equal(fake.servers[0].publicPort, 4800);
+    fake.signals.get("SIGINT")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+    assert.ok(fake.calls.includes("exit:0"));
+    assert.ok(errors.some((line) => /review server close failed/.test(line)));
+  } finally {
+    console.error = original;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("service install fails clearly when the compiled entry is missing", async () => {
-  const fake = fakeCli({ fileExists: () => false });
-  await assert.rejects(
-    runCli(["service", "install"], fake.dependencies),
-    /^Error: Build first: .*dist.main\.js does not exist \(run mise run build\)\.$/,
-  );
-  assert.equal(fake.lines.length, 0);
+test("start records the current account on sessions stored without one, looking avatars up as that token", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-adopt-"));
+  const original = console.log;
+  const infos: string[] = [];
+  console.log = (line: string) => {
+    infos.push(line);
+  };
+  try {
+    const seed = openStateDatabase(join(root, "state"));
+    const store = sqliteReviewSessions(seed);
+    const { id } = store.create({
+      repo: { owner: "acme", repo: "widgets" },
+      prNumber: 1,
+      agent: "codex",
+      account: "",
+    });
+    seed
+      .prepare(
+        "UPDATE review_sessions SET payload = json_remove(payload, '$.account')",
+      )
+      .run();
+    seed.close();
+
+    const viewers: string[] = [];
+    const fake = uiCli(root);
+    fake.dependencies.createClient = (token) =>
+      ({
+        viewer: async () => {
+          viewers.push(token);
+          return { login: "alice", avatarUrl: null };
+        },
+      }) as unknown as GitHubClient;
+    fake.dependencies.accounts = (_config, lookupUser) => {
+      const accounts = fakeAccounts(["alice"]);
+      return {
+        ...accounts,
+        active: async () => (await lookupUser("token:alice")).login,
+      };
+    };
+    await runCli(["start"], fake.dependencies);
+    const { api } = fake.servers[0];
+    await settle(() => api.getSession(id).session.account === "alice");
+    assert.equal(api.getSession(id).session.account, "alice");
+    assert.ok(viewers.includes("token:alice"));
+    assert.ok(
+      infos.some((l) => /recorded the account on older guided reviews/.test(l)),
+    );
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    console.log = original;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start still serves when no GitHub account resolves", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-noaccount-"));
+  const original = console.warn;
+  const warnings: string[] = [];
+  console.warn = (line: string) => {
+    warnings.push(line);
+  };
+  try {
+    const fake = uiCli(root);
+    fake.dependencies.accounts = () => ({
+      ...fakeAccounts(),
+      active: async () => {
+        throw new Error("gh and GITHUB_TOKEN both failed");
+      },
+    });
+    await runCli(["start"], fake.dependencies);
+    await settle(() =>
+      warnings.some((l) =>
+        /could not resolve the current GitHub account/.test(l),
+      ),
+    );
+    assert.ok(warnings.some((l) => /both failed/.test(l)));
+    assert.equal(fake.servers.length, 1);
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    console.warn = original;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start prunes old sessions at start and daily, and runs reviews on the run cap", async () => {
+  const root = mkdtempSync(join(tmpdir(), "start-ui-"));
+  try {
+    const config = { ...makeConfig(root), maxConcurrentRuns: 1 };
+    const seed = openStateDatabase(config.stateDir);
+    const seeded = sqliteReviewSessions(seed);
+    for (let i = 0; i < SESSIONS_KEPT_PER_PR + 2; i++) {
+      const { id } = seeded.create({
+        repo: { owner: "owner", repo: "repo" },
+        prNumber: 1,
+        agent: "codex",
+        account: "alice",
+      });
+      seeded.update(id, { status: "ready" });
+    }
+    seed.close();
+
+    const schedules: Array<[number, () => void]> = [];
+    const fake = fakeCli({
+      loadConfig: () => config,
+      startReviewServer: async (args) => {
+        fake.calls.push(`ui:${args.host}:${args.port}`);
+        servers.push(args.api);
+        return { url: "http://ui", close: async () => {} };
+      },
+      every: (ms, fn) => {
+        schedules.push([ms, fn]);
+        return () => {};
+      },
+    });
+    const servers: ReviewApi[] = [];
+    await runCli([], fake.dependencies);
+    assert.ok(fake.calls.includes("ui:127.0.0.1:4773"));
+    const [api] = servers;
+    assert.equal(api.listSessions().sessions.length, SESSIONS_KEPT_PER_PR);
+    assert.equal(schedules[0][0], 24 * 60 * 60 * 1000);
+    schedules[0][1]();
+    assert.equal(api.listSessions().sessions.length, SESSIONS_KEPT_PER_PR);
+
+    // The fake client has no methods, so the run fails fast.
+    const { id } = await api.createSession({ target: "owner/repo#2" });
+    await settle(() => api.getSession(id).session.status === "failed");
+    assert.equal(api.getSession(id).session.status, "failed");
+
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the default scheduler repeats until stopped", async () => {
+  let ticks = 0;
+  const stop = defaultCliDependencies.every(1, () => {
+    ticks += 1;
+  });
+  await settle(() => ticks >= 2);
+  stop();
+  const seen = ticks;
+  await new Promise((done) => setTimeout(done, 10));
+  assert.equal(ticks, seen);
+});
+
+test("the default review server dependency serves on the given address", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-default-"));
+  const db = openStateDatabase(join(root, "state"));
+  try {
+    const handle = await defaultCliDependencies.startReviewServer({
+      host: "127.0.0.1",
+      port: 0,
+      publicPort: 0,
+      api: reviewApi({
+        sessions: sqliteReviewSessions(db),
+        github: githubAccess({
+          accounts: fakeAccounts(),
+          settings: sqliteSettings(db),
+          createClient: (token) => fakeClient(token, []),
+        }),
+        startRun: async () => {},
+        agent: "codex",
+      }),
+    });
+    try {
+      const res = await fetch(`${handle.url}/api/health`);
+      assert.equal(res.status, 200);
+    } finally {
+      await handle.close();
+    }
+  } finally {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Captures what `fn` logs at each level. */
+async function captureLogs<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const methods = ["log", "warn", "error"] as const;
+  const originals = methods.map((m) => console[m]);
+  for (const m of methods)
+    console[m] = (line: string) => {
+      lines.push(line);
+    };
+  try {
+    return { result: await fn(), lines };
+  } finally {
+    methods.forEach((m, i) => (console[m] = originals[i]));
+  }
+}
+
+const walFile = (stateDir: string) =>
+  join(stateDir, "agent-workflows.sqlite-wal");
+
+test("start fails and closes the database when the app cannot bind", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-fail-"));
+  try {
+    const fake = uiCli(root);
+    fake.dependencies.startReviewServer = async () => {
+      throw new Error("listen EADDRINUSE 127.0.0.1:4773");
+    };
+    await assert.rejects(runCli(["start"], fake.dependencies), /EADDRINUSE/);
+    assert.deepEqual(fake.lines, []);
+    assert.ok(existsSync(join(fake.config.stateDir, "agent-workflows.sqlite")));
+    assert.equal(existsSync(walFile(fake.config.stateDir)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a repo cache that cannot be read is a warning, not a startup failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-scrub-"));
+  try {
+    const fake = uiCli(root);
+    mkdirSync(fake.config.stateDir, { recursive: true });
+    writeFileSync(join(fake.config.stateDir, "repos"), "not a directory");
+    const { lines } = await captureLogs(() =>
+      runCli(["start"], fake.dependencies),
+    );
+    assert.ok(
+      lines.some((l) =>
+        /could not check the repo caches for stored credentials/.test(l),
+      ),
+    );
+    assert.equal(fake.servers.length, 1);
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GITHUB_TOKEN's stand-in account is never recorded on older sessions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ui-cli-fallback-"));
+  try {
+    const seed = openStateDatabase(join(root, "state"));
+    const { id } = sqliteReviewSessions(seed).create({
+      repo: { owner: "acme", repo: "widgets" },
+      prNumber: 1,
+      agent: "codex",
+      account: "",
+    });
+    seed.close();
+
+    const fake = uiCli(root);
+    fake.dependencies.accounts = () => ({
+      ...fakeAccounts(["daemon-bot"]),
+      isFallback: async () => true,
+    });
+    const { lines } = await captureLogs(async () => {
+      await runCli(["start"], fake.dependencies);
+      await settle(() => fake.lines.length > 0);
+      await new Promise((done) => setTimeout(done, 10));
+    });
+    assert.ok(lines.some((l) => /not recording an account/.test(l)));
+    const { api } = fake.servers[0];
+    assert.equal(api.getSession(id).session.account, "");
+    fake.signals.get("SIGTERM")?.();
+    await settle(() => fake.calls.includes("exit:0"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start shuts down in order: the app, its publishes, the runs, then the database", async () => {
+  const root = mkdtempSync(join(tmpdir(), "start-order-"));
+  try {
+    const config = makeConfig(root);
+    const seed = openStateDatabase(config.stateDir);
+    const seeded = sqliteReviewSessions(seed);
+    const ready = seeded.create({
+      repo: { owner: "acme", repo: "widgets" },
+      prNumber: 7,
+      agent: "codex",
+      account: "alice",
+    });
+    seeded.update(ready.id, {
+      status: "ready",
+      pr: {
+        title: "t",
+        body: null,
+        author: "octocat",
+        authorAvatarUrl: null,
+        state: "open",
+        lastCommit: null,
+        url: "https://github.com/acme/widgets/pull/7",
+        headRef: "feat",
+        baseRef: "main",
+        headSha: "abc123",
+        files: [],
+      },
+    });
+    seed.close();
+
+    let postReview!: () => void;
+    let failFetch!: () => void;
+    let api!: ReviewApi;
+    const fake = fakeCli({
+      loadConfig: () => config,
+      // The guided run below outlives the grace.
+      shutdownGraceMs: 20,
+      createClient: () =>
+        ({
+          createPullRequestReview: () =>
+            new Promise<void>((done) => {
+              postReview = () => {
+                fake.calls.push("review-posted");
+                done();
+              };
+            }),
+          getPullRequestDetail: () =>
+            new Promise((_resolve, reject) => {
+              failFetch = () => reject(new Error("offline"));
+            }),
+          listPullRequestFiles: async () => [],
+        }) as unknown as GitHubClient,
+      startReviewServer: async (args) => {
+        api = args.api;
+        return {
+          url: "http://ui",
+          close: async () => {
+            fake.calls.push("server-closed");
+          },
+        };
+      },
+    });
+    const { lines } = await captureLogs(async () => {
+      await runCli([], fake.dependencies);
+      // A guided run waits on GitHub, and a publish waits on GitHub too.
+      const { id: running } = await api.createSession({
+        target: "acme/widgets#8",
+      });
+      await settle(() => failFetch !== undefined);
+      const publish = api.publish(ready.id, {
+        event: "COMMENT",
+        confirm: true,
+      });
+      await settle(() => postReview !== undefined);
+
+      fake.signals.get("SIGTERM")?.();
+      await settle(() => fake.calls.includes("server-closed"));
+      await new Promise((done) => setTimeout(done, 10));
+      // The app does not exit before the publish finishes.
+      assert.ok(!fake.calls.includes("exit:0"));
+      postReview();
+      await publish;
+      await settle(() => fake.calls.includes("exit:0"));
+      assert.deepEqual(fake.calls.slice(-4), [
+        "prune-stopped",
+        "server-closed",
+        "review-posted",
+        "exit:0",
+      ]);
+      // The run outlived the drain; when it resumes it must not write.
+      failFetch();
+      await new Promise((done) => setTimeout(done, 10));
+      return running;
+    });
+    assert.ok(lines.some((l) => /guided review stopped by shutdown/.test(l)));
+    assert.ok(!lines.some((l) => /could not record/.test(l)));
+
+    const after = openStateDatabase(config.stateDir);
+    const store = sqliteReviewSessions(after);
+    assert.notEqual(store.get(ready.id)?.publishedAt, null);
+    const interrupted = store.list(10).find((s) => s.prNumber === 8)!;
+    assert.equal(interrupted.status, "failed");
+    assert.equal(interrupted.stage, "Interrupted");
+    after.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

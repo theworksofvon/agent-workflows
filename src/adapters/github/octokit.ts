@@ -3,38 +3,44 @@ import type {
   PullRequest,
   PullRequestFile,
   RepoRef,
-} from "../../domain/events.js";
+} from "../../domain/pull-request.js";
 import type {
   GitHubPort,
-  HookDelivery,
-  HookRecord,
-  IssueCommentRecord,
+  PullChecks,
+  PullSearch,
   ReviewCommentDraft,
-  ReviewCommentRecord,
 } from "./github.interface.js";
+import {
+  toCheckStatus,
+  type Account,
+  type Check,
+  type PullCard,
+  type PullDetail,
+} from "../../domain/inbox.js";
+import { RateLimitedError } from "../../domain/errors.js";
+import { errorMessage } from "../../domain/util.js";
+import {
+  isPullRequest,
+  PULL_CHECKS,
+  PULL_DETAIL,
+  REPO_PULLS,
+  SEARCH_PULLS,
+  toCard,
+  toCheck,
+  toDetail,
+  type ChecksData,
+  type DetailData,
+  type RepoPullsData,
+  type SearchData,
+} from "./graphql.js";
 
 interface PullRequestApiRecord {
   number: number;
   title: string;
   body: string | null;
-  head: { ref: string; repo?: { full_name: string } | null };
-  base: { ref: string; repo?: { full_name: string } | null };
+  head: { ref: string };
+  base: { ref: string };
   draft?: boolean | null;
-}
-
-interface IssueCommentApiRecord {
-  id: number;
-  user: { login?: string } | null;
-  body?: string | null;
-  created_at: string;
-}
-
-interface ReviewCommentApiRecord extends IssueCommentApiRecord {
-  path: string;
-  line?: number | null;
-  original_line?: number | null;
-  diff_hunk: string;
-  pull_request_review_id?: number | null;
 }
 
 interface PullRequestFileApiRecord {
@@ -43,27 +49,6 @@ interface PullRequestFileApiRecord {
   additions: number;
   deletions: number;
   patch?: string;
-}
-
-interface HookApiRecord {
-  id: number;
-  events: string[];
-  active: boolean;
-  config?: { url?: string };
-}
-
-interface HookDeliveryApiRecord {
-  id: number;
-  event: string;
-  status_code: number;
-  delivered_at: string;
-  redelivery: boolean;
-}
-
-interface HookConfigRequest {
-  events: string[];
-  active: boolean;
-  config: { url: string; content_type: "json"; secret: string };
 }
 
 interface RepoRequest {
@@ -86,18 +71,13 @@ type ListFilesMethod = (
 export interface GitHubApi {
   rest: {
     pulls: {
-      list(
-        args: RepoRequest & { state: "open"; per_page: number },
-      ): Promise<{ data: PullRequestApiRecord[] }>;
-      listReviewComments(
-        args: PullRequestRequest & { per_page: number },
-      ): Promise<{ data: ReviewCommentApiRecord[] }>;
       get(args: PullRequestRequest): Promise<{ data: PullRequestApiRecord }>;
       listFiles: ListFilesMethod;
       createReview(
         args: PullRequestRequest & {
-          event: "COMMENT";
+          event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
           body: string;
+          commit_id?: string;
           comments: Array<{
             path: string;
             line: number;
@@ -106,40 +86,61 @@ export interface GitHubApi {
           }>;
         },
       ): Promise<unknown>;
-      createReplyForReviewComment(
-        args: PullRequestRequest & { comment_id: number; body: string },
-      ): Promise<unknown>;
     };
-    repos: {
-      listWebhooks(
-        args: RepoRequest & { per_page: number },
-      ): Promise<{ data: HookApiRecord[] }>;
-      createWebhook(
-        args: RepoRequest & HookConfigRequest,
-      ): Promise<{ data: HookApiRecord }>;
-      updateWebhook(
-        args: RepoRequest & HookConfigRequest & { hook_id: number },
-      ): Promise<{ data: HookApiRecord }>;
-      listWebhookDeliveries(
-        args: RepoRequest & { hook_id: number; per_page: number },
-      ): Promise<{ data: HookDeliveryApiRecord[] }>;
-    };
-    issues: {
-      listComments(
-        args: RepoRequest & { issue_number: number; per_page: number },
-      ): Promise<{ data: IssueCommentApiRecord[] }>;
-      createComment(
-        args: RepoRequest & { issue_number: number; body: string },
-      ): Promise<unknown>;
+    users: {
+      getAuthenticated(): Promise<{
+        data: { login: string; avatar_url: string | null };
+      }>;
     };
   };
+  graphql<T>(query: string, variables: Record<string, unknown>): Promise<T>;
   paginate(
     method: ListFilesMethod,
     args: PullRequestRequest & { per_page: number },
   ): Promise<PullRequestFileApiRecord[]>;
 }
 
-export { MARKER_TAG } from "../../domain/batching.js";
+/** 5 pages of 100 check contexts; GitHub's own rollup covers the rest. */
+export const CHECK_PAGES = 5;
+
+/**
+ * Runs a GraphQL request and keeps the data of an answer that also carries
+ * errors, when `usable` accepts it. A rate limit is a RateLimitedError.
+ */
+async function partialGraphql<T>(
+  run: () => Promise<T>,
+  usable: (data: T) => boolean,
+): Promise<{ data: T; warnings: string[] }> {
+  try {
+    return { data: await run(), warnings: [] };
+  } catch (err) {
+    if (isRateLimited(err))
+      throw new RateLimitedError(errorMessage(err), { cause: err });
+    const answer = err as {
+      name?: string;
+      data?: T | null;
+      errors?: Array<{ message: string }>;
+    };
+    if (answer.name !== "GraphqlResponseError" || !answer.data) throw err;
+    if (!usable(answer.data)) throw err;
+    return {
+      data: answer.data,
+      warnings: (answer.errors ?? []).map((e) => e.message),
+    };
+  }
+}
+
+/** A 429, a 403 that names a rate limit, or a GraphQL RATE_LIMITED error. */
+export function isRateLimited(err: unknown): boolean {
+  const e = err as {
+    status?: number;
+    message?: string;
+    errors?: Array<{ type?: string }>;
+  };
+  if (e.status === 429) return true;
+  if (e.status === 403 && /rate limit/i.test(String(e.message))) return true;
+  return (e.errors ?? []).some((x) => x.type === "RATE_LIMITED");
+}
 
 export class GitHubClient implements GitHubPort {
   readonly octokit: GitHubApi;
@@ -152,80 +153,80 @@ export class GitHubClient implements GitHubPort {
       options.octokit ?? new Octokit({ auth: token, baseUrl: options.baseUrl });
   }
 
-  /** List open PRs for a repo. */
-  async listOpenPRs(ref: RepoRef): Promise<PullRequest[]> {
-    const res = await this.octokit.rest.pulls.list({
-      owner: ref.owner,
-      repo: ref.repo,
-      state: "open",
-      per_page: 100,
-    });
-    return res.data.map((p) => ({
-      repo: ref,
-      number: p.number,
-      title: p.title,
-      body: p.body,
-      headRef: p.head.ref,
-      baseRef: p.base.ref,
-      draft: p.draft ?? false,
-      fromFork: isFromFork(p),
-    }));
+  /** The account the token belongs to. */
+  async viewer(): Promise<Account> {
+    const { data } = await this.octokit.rest.users.getAuthenticated();
+    return { login: data.login, avatarUrl: data.avatar_url ?? null };
   }
 
-  /** Issue/PR conversation comments, newest last. */
-  async listIssueComments(
-    ref: RepoRef,
-    prNumber: number,
-  ): Promise<IssueCommentRecord[]> {
-    const res = await this.octokit.rest.issues.listComments({
-      owner: ref.owner,
-      repo: ref.repo,
-      issue_number: prNumber,
-      per_page: 100,
-    });
-    return res.data.map((c) => ({
-      id: c.id,
-      author: c.user?.login ?? "unknown",
-      body: c.body ?? "",
-      createdAt: c.created_at,
-    }));
+  /**
+   * A search that GitHub answers with errors and data, as when an org
+   * requires SSO, returns the data with the errors as warnings.
+   */
+  async searchPullRequests(query: string, first: number): Promise<PullSearch> {
+    const { data, warnings } = await partialGraphql(
+      () => this.octokit.graphql<SearchData>(SEARCH_PULLS, { q: query, first }),
+      (answer) => answer.search !== null,
+    );
+    // The predicate above guarantees a search.
+    const search = data.search!;
+    return {
+      pulls: search.nodes.filter(isPullRequest).map(toCard),
+      truncated: search.issueCount > search.nodes.length,
+      warnings,
+    };
   }
 
-  /** Inline review comments on a PR, newest last. */
-  async listReviewComments(
-    ref: RepoRef,
-    prNumber: number,
-  ): Promise<ReviewCommentRecord[]> {
-    const res = await this.octokit.rest.pulls.listReviewComments({
+  /** Open PRs of a repository, most recently updated first. */
+  async listRepoPullRequests(ref: RepoRef, first: number): Promise<PullCard[]> {
+    const data = await this.octokit.graphql<RepoPullsData>(REPO_PULLS, {
       owner: ref.owner,
-      repo: ref.repo,
-      pull_number: prNumber,
-      per_page: 100,
+      name: ref.repo,
+      first,
     });
-    return res.data.map((c) => ({
-      id: c.id,
-      author: c.user?.login ?? "unknown",
-      body: c.body ?? "",
-      path: c.path,
-      line: c.line ?? null,
-      originalLine: c.original_line ?? null,
-      diffHunk: c.diff_hunk,
-      createdAt: c.created_at,
-      reviewId: c.pull_request_review_id ?? null,
-    }));
+    return data.repository.pullRequests.nodes.map(toCard);
   }
 
-  async createComment(
+  async getPullRequestDetail(
     ref: RepoRef,
     prNumber: number,
-    body: string,
-  ): Promise<void> {
-    await this.octokit.rest.issues.createComment({
+  ): Promise<PullDetail> {
+    const data = await this.octokit.graphql<DetailData>(PULL_DETAIL, {
       owner: ref.owner,
-      repo: ref.repo,
-      issue_number: prNumber,
-      body,
+      name: ref.repo,
+      number: prNumber,
     });
+    return toDetail(data.repository.pullRequest);
+  }
+
+  /**
+   * The check contexts on the PR's head commit, as GitHub lists them, up to
+   * CHECK_PAGES pages of 100.
+   */
+  async getPullRequestChecks(
+    ref: RepoRef,
+    prNumber: number,
+  ): Promise<PullChecks> {
+    const checks: Check[] = [];
+    let after: string | null = null;
+    for (let page = 1; ; page++) {
+      const data: ChecksData = await this.octokit.graphql<ChecksData>(
+        PULL_CHECKS,
+        { owner: ref.owner, name: ref.repo, number: prNumber, after },
+      );
+      const pull = data.repository.pullRequest;
+      const rollup = pull.commits.nodes[0]?.commit.statusCheckRollup;
+      checks.push(...(rollup?.contexts.nodes ?? []).map(toCheck));
+      const more = rollup?.contexts.pageInfo.hasNextPage === true;
+      if (!more || page === CHECK_PAGES)
+        return {
+          headSha: pull.headRefOid,
+          checks,
+          truncated: more,
+          overall: rollup ? toCheckStatus({ state: rollup.state }) : null,
+        };
+      after = rollup.contexts.pageInfo.endCursor;
+    }
   }
 
   async getPullRequest(ref: RepoRef, prNumber: number): Promise<PullRequest> {
@@ -234,15 +235,15 @@ export class GitHubClient implements GitHubPort {
       repo: ref.repo,
       pull_number: prNumber,
     });
+    const p = res.data;
     return {
       repo: ref,
-      number: res.data.number,
-      title: res.data.title,
-      body: res.data.body,
-      headRef: res.data.head.ref,
-      baseRef: res.data.base.ref,
-      draft: res.data.draft ?? false,
-      fromFork: isFromFork(res.data),
+      number: p.number,
+      title: p.title,
+      body: p.body,
+      headRef: p.head.ref,
+      baseRef: p.base.ref,
+      draft: p.draft ?? false,
     };
   }
 
@@ -273,13 +274,16 @@ export class GitHubClient implements GitHubPort {
     prNumber: number;
     body: string;
     comments: ReviewCommentDraft[];
+    event?: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+    commitId?: string;
   }): Promise<void> {
     await this.octokit.rest.pulls.createReview({
       owner: args.repo.owner,
       repo: args.repo.repo,
       pull_number: args.prNumber,
-      event: "COMMENT",
+      event: args.event ?? "COMMENT",
       body: args.body,
+      ...(args.commitId ? { commit_id: args.commitId } : {}),
       comments: args.comments.map((comment) => ({
         path: comment.path,
         line: comment.line,
@@ -288,100 +292,4 @@ export class GitHubClient implements GitHubPort {
       })),
     });
   }
-
-  async replyToReviewComment(
-    ref: RepoRef,
-    prNumber: number,
-    commentId: number,
-    body: string,
-  ): Promise<void> {
-    await this.octokit.rest.pulls.createReplyForReviewComment({
-      owner: ref.owner,
-      repo: ref.repo,
-      pull_number: prNumber,
-      comment_id: commentId,
-      body,
-    });
-  }
-
-  async listHooks(ref: RepoRef): Promise<HookRecord[]> {
-    const res = await this.octokit.rest.repos.listWebhooks({
-      owner: ref.owner,
-      repo: ref.repo,
-      per_page: 100,
-    });
-    return res.data.map(toHookRecord);
-  }
-
-  async createHook(
-    ref: RepoRef,
-    args: { url: string; secret: string; events: string[] },
-  ): Promise<HookRecord> {
-    const res = await this.octokit.rest.repos.createWebhook({
-      owner: ref.owner,
-      repo: ref.repo,
-      ...hookConfig(args),
-    });
-    return toHookRecord(res.data);
-  }
-
-  async updateHook(
-    ref: RepoRef,
-    hookId: number,
-    args: { url: string; secret: string; events: string[] },
-  ): Promise<HookRecord> {
-    const res = await this.octokit.rest.repos.updateWebhook({
-      owner: ref.owner,
-      repo: ref.repo,
-      hook_id: hookId,
-      ...hookConfig(args),
-    });
-    return toHookRecord(res.data);
-  }
-
-  async listHookDeliveries(
-    ref: RepoRef,
-    hookId: number,
-  ): Promise<HookDelivery[]> {
-    const res = await this.octokit.rest.repos.listWebhookDeliveries({
-      owner: ref.owner,
-      repo: ref.repo,
-      hook_id: hookId,
-      per_page: 30,
-    });
-    return res.data.map((d) => ({
-      id: d.id,
-      event: d.event,
-      statusCode: d.status_code,
-      deliveredAt: d.delivered_at,
-      redelivery: d.redelivery,
-    }));
-  }
-}
-
-function isFromFork(p: PullRequestApiRecord): boolean {
-  const head = p.head.repo?.full_name;
-  if (head === undefined) return true;
-  return head !== p.base.repo?.full_name;
-}
-
-function hookConfig(args: {
-  url: string;
-  secret: string;
-  events: string[];
-}): HookConfigRequest {
-  return {
-    events: args.events,
-    active: true,
-    config: { url: args.url, content_type: "json", secret: args.secret },
-  };
-}
-
-function toHookRecord(h: HookApiRecord): HookRecord {
-  return {
-    id: h.id,
-    url: h.config?.url ?? "",
-    events: h.events,
-    active: h.active,
-  };
 }
