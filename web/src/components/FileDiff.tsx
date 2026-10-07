@@ -1,4 +1,4 @@
-import { ChevronRight, Sparkles } from "lucide-react";
+import { ChevronRight, Sparkles, X } from "lucide-react";
 import {
   Fragment,
   memo,
@@ -55,10 +55,12 @@ export const FileDiff = memo(function FileDiff({
 
   // A jump from the overview to a finding in this file opens it in full.
   const focusHere = review.focus?.path === file.path;
-  const refLines =
-    focusHere && review.focus && "lines" in review.focus
-      ? review.focus.lines
-      : null;
+  const refFocus =
+    focusHere && review.focus && "lines" in review.focus ? review.focus : null;
+  const refSpan = useMemo(
+    () => (refFocus ? spanOf(hunks, refFocus.lines) : null),
+    [hunks, refFocus],
+  );
   useEffect(() => {
     if (!focusHere) return;
     setOpen(true);
@@ -128,6 +130,7 @@ export const FileDiff = memo(function FileDiff({
   const rows: ReactNode[] = [];
   let shown = 0;
   const limit = showAll ? Infinity : COLLAPSE_LINES;
+  let flat = -1;
   outer: for (const [h, hunk] of hunks.entries()) {
     rows.push(
       <tr className="dl-hunk" key={`h${h}`}>
@@ -140,15 +143,39 @@ export const FileDiff = memo(function FileDiff({
     for (const [i, line] of hunk.lines.entries()) {
       if (shown >= limit) break outer;
       shown += 1;
+      flat += 1;
+      if (refFocus && refSpan && flat === refSpan.first)
+        rows.push(
+          <tr className="dl-ref-label" key="ref-label">
+            <td colSpan={3}>
+              <span className="dl-ref-tag">Flow step</span>
+              <span className="dl-ref-text">{refFocus.label}</span>
+              <span className="dl-ref-lines">
+                {refFocus.lines.end > refFocus.lines.start
+                  ? `lines ${refFocus.lines.start}–${refFocus.lines.end}`
+                  : `line ${refFocus.lines.start}`}
+              </span>
+              <button
+                type="button"
+                className="dl-ref-close"
+                aria-label="Clear the highlight"
+                onClick={review.clearFocus}
+              >
+                <X size={13} />
+              </button>
+            </td>
+          </tr>,
+        );
       rows.push(
         <DiffLine
           key={`${h}:${i}`}
           line={line}
           marked={
-            refLines !== null &&
-            line.newLine !== null &&
-            line.newLine >= refLines.start &&
-            line.newLine <= refLines.end
+            refSpan === null || flat < refSpan.first || flat > refSpan.last
+              ? null
+              : flat === refSpan.last
+                ? "end"
+                : "in"
           }
           tokens={tokens?.[h]?.[i]}
           active={composerLine !== null && composerLine === line.newLine}
@@ -296,14 +323,17 @@ const DiffLine = memo(function DiffLine({
   line: PatchLine;
   tokens: Token[] | undefined;
   active: boolean;
-  /** Inside the line range of the flow step that the reviewer opened. */
-  marked: boolean;
+  /**
+   * Inside the line range of the flow step that the reviewer opened; "end"
+   * on the last row, which closes the box.
+   */
+  marked: "in" | "end" | null;
   onComment: (line: number) => void;
 }) {
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
   return (
     <tr
-      className={`dl dl-${line.kind} ${active ? "is-active" : ""} ${marked ? "is-ref" : ""}`}
+      className={`dl dl-${line.kind} ${active ? "is-active" : ""} ${marked ? "is-ref" : ""} ${marked === "end" ? "is-ref-end" : ""}`}
     >
       <td className="gutter">{line.oldLine}</td>
       <td className="gutter">
@@ -345,4 +375,27 @@ function groupByLine<T extends ApiFinding | HumanComment>(
     else map.set(item.line, [item]);
   }
   return map;
+}
+
+/**
+ * The rows, counted across hunks in display order, from the first to the
+ * last line of `lines` on the new side. Deleted rows between them belong to
+ * the span, so the box around it has no gaps.
+ */
+function spanOf(
+  hunks: ReturnType<typeof parsePatch>,
+  lines: { start: number; end: number },
+): { first: number; last: number } | null {
+  let first = -1;
+  let last = -1;
+  let flat = -1;
+  for (const hunk of hunks)
+    for (const line of hunk.lines) {
+      flat += 1;
+      const n = line.newLine;
+      if (n === null || n < lines.start || n > lines.end) continue;
+      if (first < 0) first = flat;
+      last = flat;
+    }
+  return first < 0 ? null : { first, last };
 }

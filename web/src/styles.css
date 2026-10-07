@@ -3655,11 +3655,104 @@ html.dark .pr-badge {
   color: var(--foreground);
 }
 
-/* The lines of the flow step that the reviewer opened from the overview. */
-.dl.is-ref td {
-  background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+/* The lines of the flow step that the reviewer opened from the overview,
+   in GitHub's line-highlight colors: an amber fill over the whole row and
+   an amber box around the range, with the step's label as its first row. */
+:root {
+  --ref-line: #d4a72c;
+  --ref-fill: #fff8c5;
+  --ref-label: #fbefb3;
+  --ref-text: #7d4e00;
 }
 
-.dl.is-ref td.gutter:first-child {
-  box-shadow: inset 3px 0 0 var(--primary);
+html.dark {
+  --ref-line: #bb8009;
+  --ref-fill: rgba(187, 128, 9, 0.18);
+  --ref-label: rgba(187, 128, 9, 0.32);
+  --ref-text: #f2cc60;
+}
+
+.dl.is-ref td,
+.dl-ref-label td {
+  background-color: var(--ref-fill);
+  box-shadow:
+    var(--ref-top, 0 0 #0000),
+    var(--ref-bottom, 0 0 #0000),
+    var(--ref-side, 0 0 #0000);
+}
+
+.dl.is-ref td:first-child,
+.dl-ref-label td {
+  --ref-side: inset 2px 0 0 var(--ref-line);
+}
+
+.dl.is-ref td:last-child {
+  --ref-side: inset -2px 0 0 var(--ref-line);
+}
+
+.dl.is-ref-end td {
+  --ref-bottom: inset 0 -2px 0 var(--ref-line);
+}
+
+.dl.is-ref td.gutter {
+  color: var(--ref-text);
+  font-weight: 600;
+}
+
+.dl.is-ref td.gutter .ln {
+  color: inherit;
+}
+
+.dl-ref-label td {
+  --ref-top: inset 0 2px 0 var(--ref-line);
+  background-color: var(--ref-label);
+  box-shadow:
+    inset 0 2px 0 var(--ref-line),
+    inset 2px 0 0 var(--ref-line),
+    inset -2px 0 0 var(--ref-line);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--ref-text);
+}
+
+.dl-ref-label td > * {
+  vertical-align: middle;
+}
+
+.dl-ref-tag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--ref-line);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dl-ref-text {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.dl-ref-lines {
+  margin-left: 10px;
+  opacity: 0.8;
+}
+
+.dl-ref-close {
+  float: right;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dl-ref-close:hover {
+  background: color-mix(in srgb, var(--ref-line) 30%, transparent);
 }

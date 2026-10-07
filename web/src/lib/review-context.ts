@@ -12,7 +12,12 @@ import type {
  */
 export type FocusTarget =
   | { findingId: string; path: string }
-  | { path: string; lines: { start: number; end: number } };
+  | {
+      path: string;
+      lines: { start: number; end: number };
+      /** The flow step that names these lines, shown above them. */
+      label: string;
+    };
 
 /**
  * A move from the overview to another tab. The page records `label` for the
@@ -23,6 +28,7 @@ export type Jump = (label: string, href: string, focus?: FocusTarget) => void;
 /** What a file diff needs from the session page, without prop drilling. */
 export interface ReviewActions {
   focus: FocusTarget | null;
+  clearFocus(): void;
   findingsFor(path: string): ApiFinding[];
   commentsFor(path: string): HumanComment[];
   verdictFor(findingId: string): FindingVerdict | undefined;

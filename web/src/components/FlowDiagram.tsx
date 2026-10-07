@@ -137,7 +137,11 @@ function FlowStep({
       title={`Open the code\n${tip}`}
       onClick={onClick(
         ref
-          ? { path: ref.path, lines: { start: ref.start, end: ref.end } }
+          ? {
+              path: ref.path,
+              lines: { start: ref.start, end: ref.end },
+              label: node.label,
+            }
           : undefined,
       )}
     >

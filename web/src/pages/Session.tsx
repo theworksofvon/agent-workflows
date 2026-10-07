@@ -146,6 +146,7 @@ export function Session({
     const commentsByPath = groupByPath(human.comments);
     return {
       focus,
+      clearFocus: () => setFocus(null),
       findingsFor: (path) => findingsByPath.get(path) ?? EMPTY_FINDINGS,
       commentsFor: (path) => commentsByPath.get(path) ?? EMPTY_COMMENTS,
       verdictFor: (findingId) => human.verdicts[findingId],
