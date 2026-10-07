@@ -41,28 +41,8 @@ jobs:
       - name: Validate GitHub Actions
         uses: docker://rhysd/actionlint:1.7.12
 
-  unit:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4
-      - run: mise run deps
-      - run: mise run test:unit
-
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4
-      - run: mise run deps
-      - run: mise run test:integration
-
   coverage:
-    name: Complete Runtime Coverage
+    name: Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+// Stands in for the gh CLI: the accounts come from FAKE_GH_ACCOUNTS
+// ("login,login"; the first is active), and each token is "tok-<login>".
+const args = process.argv.slice(2);
+const logins = (process.env.FAKE_GH_ACCOUNTS ?? "").split(",").filter(Boolean);
+if (args[0] === "auth" && args[1] === "status") {
+  const rows = logins.map((login, i) => ({
+    login,
+    active: i === 0,
+    state: "success",
+  }));
+  process.stdout.write(JSON.stringify(rows));
+} else if (args[0] === "auth" && args[1] === "token") {
+  process.stdout.write(`tok-${args[args.indexOf("--user") + 1]}\n`);
+} else {
+  process.stderr.write(`fake gh: unsupported ${args.join(" ")}\n`);
+  process.exit(1);
+}

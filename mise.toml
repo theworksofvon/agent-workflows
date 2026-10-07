@@ -59,20 +59,13 @@ run = "prettier --check src tests scripts .github package.json tsconfig.json tsc
 description = "Syntax-check the Node setup and doctor scripts"
 run = "node --check scripts/setup.mjs && node --check scripts/doctor.mjs"
 
-# Tests must not see the developer's .env: the logger reads LOG_LEVEL at
-# import time and the config tests manage their own variables.
+# The tests start the real app with a fake GitHub and a fake agent, and the
+# app's coverage comes from those child processes. Branches sit lower than
+# lines because some validation branches are reachable only with a broken
+# GitHub or agent.
 [tasks.test]
-description = "Every test with exact 100% coverage of src/"
-env = { LOG_LEVEL = false }
-run = 'node --import tsx --test --experimental-test-coverage --test-coverage-include="src/**/*.ts" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 "tests/**/*.test.ts"'
-
-[tasks."test:unit"]
-env = { LOG_LEVEL = false }
-run = 'node --import tsx --test "tests/unit/*.test.ts"'
-
-[tasks."test:integration"]
-env = { LOG_LEVEL = false }
-run = 'node --import tsx --test "tests/integration/*.test.ts"'
+description = "Every test, with a coverage floor on src/"
+run = 'node --import tsx --test --test-timeout=120000 --experimental-test-coverage --test-coverage-include="src/**/*.ts" --test-coverage-lines=90 --test-coverage-branches=65 --test-coverage-functions=90 "tests/**/*.test.ts"'
 
 [tasks."test:smoke"]
 description = "Exercise the compiled CLI help routes"
@@ -86,7 +79,7 @@ depends = ["build"]
 run = "node dist/main.js start"
 
 [tasks."web:dev"]
-description = "Run the guided review web app with hot reload (MOCK_API=1 for fixture data)"
+description = "Run the guided review web app with hot reload against the app on port 4773"
 run = "pnpm --dir web exec vite"
 
 [tasks."web:build"]
@@ -94,8 +87,8 @@ description = "Build the guided review web app into web/dist"
 run = "pnpm --dir web exec vite build"
 
 [tasks."web:check"]
-description = "Typecheck, test, and build the guided review web app"
-run = "pnpm --dir web exec tsc --noEmit && pnpm --dir web exec vitest run && pnpm --dir web exec vite build"
+description = "Typecheck and build the guided review web app"
+run = "pnpm --dir web exec tsc --noEmit && pnpm --dir web exec vite build"
 
 [tasks."docker:build"]
 description = "Build the Docker image (see README, Run with Docker)"

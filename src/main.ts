@@ -37,7 +37,7 @@ import { ServerStoppedError } from "./domain/errors.js";
 
 export interface CliDependencies {
   loadConfig(): Config;
-  createClient(token: string): GitHubClient;
+  createClient(token: string, apiUrl: string): GitHubClient;
   /**
    * The GitHub accounts the guided review app can act as; `lookupUser` is
    * GET /user with a token.
@@ -68,7 +68,7 @@ export interface CliDependencies {
 
 export const defaultCliDependencies: CliDependencies = {
   loadConfig,
-  createClient: (token) => new GitHubClient(token),
+  createClient: (token, apiUrl) => new GitHubClient(token, { baseUrl: apiUrl }),
   accounts: (config, lookupUser) =>
     ghAccounts({ fallbackToken: config.githubToken, lookupUser }),
   getAgent,
@@ -168,6 +168,8 @@ export async function runStartCommand(
   };
   dependencies.onSignal("SIGINT", () => void stop("SIGINT"));
   dependencies.onSignal("SIGTERM", () => void stop("SIGTERM"));
+  // Printed last: the address tells a caller that a signal now shuts down cleanly.
+  dependencies.writeLine(`Guided review: ${ui.url}`);
 }
 
 /** Removes tokens that older versions stored in the repo caches' remote URLs. */
@@ -182,6 +184,7 @@ function scrubCredentials(config: Config): void {
 }
 
 interface GuidedReviewService {
+  url: string;
   /** Stops taking requests and waits for every publish in flight. */
   close(): Promise<void>;
   /**
@@ -220,7 +223,8 @@ async function startGuidedReview(
   const github = githubAccess({
     accounts,
     settings: sqliteSettings(db),
-    createClient: dependencies.createClient,
+    createClient: (token) =>
+      dependencies.createClient(token, config.githubApiUrl),
   });
   void adoptAccount(sessions, github, accounts);
   // A deep triage runs the adversarial pass even when the mode is "off".
@@ -253,9 +257,9 @@ async function startGuidedReview(
     publicPort: config.uiPublicPort,
     api,
   });
-  dependencies.writeLine(`Guided review: ${server.url}`);
   const stopPruning = dependencies.every(PRUNE_INTERVAL_MS, prune);
   return {
+    url: server.url,
     close: async () => {
       stopPruning();
       try {
@@ -395,7 +399,7 @@ export async function runReviewCommand(
   const config = dependencies.loadConfig();
   const token =
     config.githubToken ?? (await activeGhToken(config, dependencies));
-  const client = dependencies.createClient(token);
+  const client = dependencies.createClient(token, config.githubApiUrl);
   const agent = dependencies.getAgent(config.agent, config);
   const adversarialMode: ReviewAdversarialMode = forceAdversarial
     ? "always"
@@ -436,7 +440,7 @@ function ghAccountsOf(
   dependencies: CliDependencies,
 ): GitHubAccountsPort {
   return dependencies.accounts(config, (token) =>
-    dependencies.createClient(token).viewer(),
+    dependencies.createClient(token, config.githubApiUrl).viewer(),
   );
 }
 

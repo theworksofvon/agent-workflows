@@ -203,7 +203,7 @@ pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
 | `pnpm review owner/repo#123 --adversarial` | Force the adversarial pass; `--no-adversarial` skips it.                       |
 | `mise run start`                           | Build, then serve the app (alias `ui`).                                        |
 | `mise run dev`                             | Run from source and restart on change.                                         |
-| `mise run web:dev`                         | Run the web app with hot reload; `MOCK_API=1` uses fixture data.               |
+| `mise run web:dev`                         | Run the web app with hot reload against the app on port 4773.                  |
 
 Review targets can also be full GitHub PR URLs. See
 [docs/pr-review-mode.md](docs/pr-review-mode.md) for the `review` command.
@@ -311,11 +311,14 @@ mise run gate       # typecheck, lint, format, scripts, tests, smoke, web app, i
 `mise tasks` lists every command; the parts of the gate (`typecheck`,
 `typecheck:tests`, `lint`, `format:check`, `check:scripts`, `test`,
 `test:smoke`, `web:check`) can run on their own, and CI runs the same tasks.
-`mise run test` includes every production TypeScript file under `src/` and
-fails below 100% for lines, branches, or functions. `test:unit` and
-`test:integration` run each tier. The tests use local servers, temporary Git
-repositories, and fake agent binaries, so they spend no model tokens and need
-no GitHub credentials.
+`mise run test` starts the real app as a separate process and tests it
+through its HTTP API and the `review` command. Only the edges are fake: a
+local GitHub server (REST and GraphQL) backed by real bare Git repositories,
+a fake `gh`, and a fake agent CLI that reads the real checkout and writes
+its report. The fakes live in `tests/integration/harness/`. The tests spend
+no model tokens, need no GitHub credentials, and never post to GitHub. The
+task fails below 90% of the lines and functions or 65% of the branches in
+`src/`.
 
 The code is laid out as ports and adapters:
 

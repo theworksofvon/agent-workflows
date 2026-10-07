@@ -8,6 +8,8 @@ export type { ReviewAdversarialMode };
 export interface Config {
   /** Unset when gh's accounts are the only credentials. */
   githubToken: string | undefined;
+  /** GitHub's REST and GraphQL API, which a test points at a fake server. */
+  githubApiUrl: string;
   agent: string;
   reviewAdversarialMode: ReviewAdversarialMode;
   reviewAdversarialAgent: string;
@@ -106,6 +108,7 @@ export function loadConfig(): Config {
   const uiPort = integer("UI_PORT", "4773", { min: 1, max: 65535 });
   const cfg: Config = {
     githubToken: optional("GITHUB_TOKEN", "") || undefined,
+    githubApiUrl: optional("GITHUB_API_URL", "https://api.github.com"),
     agent,
     reviewAdversarialMode,
     reviewAdversarialAgent: agentName("REVIEW_ADVERSARIAL_AGENT", agent),

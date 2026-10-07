@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Test the Real App Through Its API
+
+Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Replace the unit tests and the web mock with integration tests that drive the real app.
+Message: The tests now start the real app and call its HTTP API and the `review` command. Only GitHub, `gh`, and the agent CLI are fake.
+Added/Changed: `tests/integration/harness/` holds a fake GitHub server (REST and GraphQL) backed by real bare Git repositories, a fake `gh` that lists accounts from `FAKE_GH_ACCOUNTS`, and a fake agent CLI that reads the real checkout with Git and writes the guide or review report. The app clones from the fake through a `url.insteadOf` rule in a temporary HOME. 20 tests cover a guided review from creation to publish, a rerun that keeps verdicts, an agent with no report, input errors, accounts, the inbox, checks, the Host, Origin, and content-type checks, the web page, shutdown, and the `review` command with `--post`, `--adversarial`, and `GITHUB_TOKEN`. A new setting, `GITHUB_API_URL` (default `https://api.github.com`), points the app at another GitHub API. The coverage floor is now 90% of lines and functions and 65% of branches, from the coverage of the app processes that the tests start.
+Fixed/Removed: `start` printed its address before it installed its SIGINT and SIGTERM handlers, so a signal in that gap stopped the app without a clean shutdown; it now prints the address last. Removed `tests/unit/` (18 files), `tests/fakes/`, the 4 integration tests that called internal functions, the 12 web test files and Vitest, the `test:unit` and `test:integration` tasks and CI jobs, and the web dev mock (`web/src/dev/`, `MOCK_API=1`).
+Handoff: `mise run web:dev` needs the app running on port 4773.
+
 ### Prepare the Repository for Sharing
 
 Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `feat/guided-review`.

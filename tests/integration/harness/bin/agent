@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+// Stands in for a coding agent CLI. It reads the prompt from stdin, reads
+// the real checkout in its working directory with git, and writes the
+// report file that the prompt names. A PR title with [silent] makes it
+// exit without a report.
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+let prompt = "";
+for await (const chunk of process.stdin) prompt += chunk;
+
+if (prompt.includes("[silent]")) process.exit(0);
+
+const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+const base = /git diff origin\/(\S+)\.\.\.HEAD/.exec(prompt)?.[1] ?? "main";
+const files = git("diff", "--name-only", `origin/${base}...HEAD`)
+  .split("\n")
+  .filter(Boolean);
+
+const guidePath = /Then write JSON to (\S+) with this shape/.exec(prompt)?.[1];
+const reviewPath =
+  /Write the review JSON described by that skill to (\S+) before you exit/.exec(
+    prompt,
+  )?.[1];
+
+if (guidePath) {
+  writeFileSync(
+    guidePath,
+    JSON.stringify({
+      overview: {
+        context: "Adds a greeting to the widget.",
+        steps: ["Add greet()", "Call it from the app"],
+        flows: [],
+      },
+      chapters: files.map((file, i) => ({
+        id: `c${i + 1}`,
+        title: `Change ${file}`,
+        role: i === 0 ? "core" : "supporting",
+        summary: `What ${file} does.`,
+        files: [file],
+      })),
+    }),
+  );
+} else if (reviewPath) {
+  // The first added line of the first changed file, so the finding is on
+  // a line that GitHub accepts a comment on.
+  const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/m.exec(
+    git("diff", "-U0", `origin/${base}...HEAD`, "--", files[0]),
+  );
+  const role = /Review role: (\w+)/.exec(prompt)?.[1];
+  writeFileSync(
+    reviewPath,
+    JSON.stringify({
+      summary: `${role} review`,
+      findings: [
+        {
+          path: files[0],
+          line: Number(hunk[1]),
+          severity: "high",
+          body: "greet() ignores an empty name.",
+        },
+      ],
+    }),
+  );
+}
