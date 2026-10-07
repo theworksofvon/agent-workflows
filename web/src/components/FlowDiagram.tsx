@@ -1,5 +1,4 @@
-import { ArrowRight } from "lucide-react";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { pad2 } from "../lib/format";
 import type { Jump } from "../lib/review-context";
 import { sessionHref } from "../lib/route";
@@ -31,10 +30,7 @@ export function FlowDiagram({
   return (
     <div className="flow card">
       <div className="flow-head">
-        <div>
-          <div className="flow-title">{flow.title || "Before / after"}</div>
-          {flow.caption && <div className="flow-caption">{flow.caption}</div>}
-        </div>
+        <div className="flow-title">{flow.title || "Before / after"}</div>
         <span className="spacer" />
         {added > 0 && <span className="add flow-count">+{added}</span>}
         <div className="segmented" role="group" aria-label="Show before or after">
@@ -51,35 +47,35 @@ export function FlowDiagram({
           ))}
         </div>
       </div>
-      <div className="flow-chain">
-        {nodes.length === 0 && <span className="muted small">No steps.</span>}
+      {flow.caption && <div className="flow-caption">{flow.caption}</div>}
+      <ol className="flow-chain">
+        {nodes.length === 0 && <li className="muted small">No steps.</li>}
         {nodes.map((node, i) => {
           const number = node.chapter ? chapterNumbers.get(node.chapter) : undefined;
           return (
-            <Fragment key={`${side}-${i}`}>
-              {i > 0 && (
-                <ArrowRight className="flow-arrow" size={14} aria-hidden />
-              )}
-              <span className={`flow-node flow-${node.change}`}>
-                {CHANGE_MARK[node.change] && (
-                  <span className="flow-mark">{CHANGE_MARK[node.change]}</span>
-                )}
-                <span className="flow-label">{node.label}</span>
-                {number !== undefined && node.chapter && (
-                  <a
-                    className="flow-chapter"
-                    href={sessionHref(sessionId, "guide", node.chapter)}
-                    title="Open this chapter"
-                    onClick={jumpOnClick(onJump, flow.title || "Before / after")}
-                  >
-                    {pad2(number)}
-                  </a>
-                )}
+            <li key={`${side}-${i}`} className={`flow-step flow-${node.change}`}>
+              <span className="flow-dot" aria-hidden>
+                {CHANGE_MARK[node.change]}
               </span>
-            </Fragment>
+              <span className="flow-node">
+                <span className="flow-label">{node.label}</span>
+              </span>
+              {number !== undefined && node.chapter ? (
+                <a
+                  className="flow-chapter"
+                  href={sessionHref(sessionId, "guide", node.chapter)}
+                  title="Open this chapter"
+                  onClick={jumpOnClick(onJump, flow.title || "Before / after")}
+                >
+                  {pad2(number)}
+                </a>
+              ) : (
+                <span />
+              )}
+            </li>
           );
         })}
-      </div>
+      </ol>
     </div>
   );
 }

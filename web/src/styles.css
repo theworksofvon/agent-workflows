@@ -1590,11 +1590,46 @@ html.dark .toast-error {
 
 /* ── Overview ──────────────────────────────────────────── */
 
-.overview-top {
+/* The story of the PR on the left; the side panel holds the work to do
+   (chapters and findings) and stays in view while the story scrolls. */
+.overview {
   display: grid;
-  grid-template-columns: minmax(300px, 5fr) 7fr;
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  gap: 28px;
   align-items: start;
+}
+
+.overview-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.overview-side {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+/* The panel scrolls as a whole; its cards keep their full height. */
+.overview-side > * {
+  flex-shrink: 0;
+}
+
+@media (max-width: 1100px) {
+  .overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .overview-side {
+    position: static;
+    max-height: none;
+  }
 }
 
 .overview-text h2 {
@@ -1655,9 +1690,9 @@ html.dark .toast-error {
 
 .flow-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 4px;
 }
 
 .flow-title {
@@ -1668,7 +1703,7 @@ html.dark .toast-error {
 .flow-caption {
   color: var(--muted-foreground);
   font-size: 12.5px;
-  margin-top: 2px;
+  margin-bottom: 14px;
 }
 
 .flow-count {
@@ -1677,79 +1712,100 @@ html.dark .toast-error {
   line-height: 28px;
 }
 
+/* One step per row: a dot on a rail, the step, and its chapter, so long
+   labels wrap inside their own row and every row lines up. */
 .flow-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 6px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.flow-arrow {
-  color: var(--faint);
+.flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.flow-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 8.5px;
+  top: calc(50% + 9px);
+  height: calc(100% - 12px);
+  width: 1px;
+  background: var(--border);
+}
+
+.flow-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--input);
+  background: var(--card);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .flow-node {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 6px 0 10px;
+  display: block;
+  padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--card);
   font-family: var(--mono);
   font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 html.dark .flow-node {
   border-color: var(--input);
 }
 
-.flow-node.flow-unchanged {
-  padding-right: 10px;
-}
-
-.flow-node:has(.flow-chapter) {
-  padding-right: 4px;
-}
-
-.flow-node.flow-added {
+.flow-added .flow-node {
   background: var(--success-surface);
   border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  box-shadow: inset 2px 0 0 var(--success);
 }
 
-.flow-node.flow-changed {
+.flow-added .flow-dot {
+  color: var(--success-foreground);
+  border-color: var(--success);
+}
+
+.flow-changed .flow-node {
   background: var(--warning-surface);
   border-color: color-mix(in srgb, var(--warning) 40%, transparent);
-  box-shadow: inset 2px 0 0 var(--warning);
 }
 
-.flow-node.flow-removed {
+.flow-changed .flow-dot {
+  color: var(--warning-foreground);
+  border-color: var(--warning);
+}
+
+.flow-removed .flow-node {
   color: var(--muted-foreground);
   background: transparent;
   border-style: dashed;
 }
 
-.flow-node.flow-removed .flow-label {
+.flow-removed .flow-label {
   text-decoration: line-through;
   text-decoration-color: var(--error);
 }
 
-.flow-mark {
-  font-weight: 700;
-}
-
-.flow-added .flow-mark {
-  color: var(--success-foreground);
-}
-
-.flow-changed .flow-mark {
-  color: var(--warning-foreground);
-}
-
-.flow-removed .flow-mark {
+.flow-removed .flow-dot {
   color: var(--error-foreground);
+  border-color: var(--error);
 }
 
 .flow-chapter {
@@ -1771,14 +1827,6 @@ html.dark .flow-chapter {
 .flow-chapter:hover {
   border-color: var(--primary);
   color: var(--primary-text);
-}
-
-.overview-bottom {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-top: 28px;
-  align-items: start;
 }
 
 .list-card {
@@ -1814,7 +1862,7 @@ html.dark .flow-chapter {
 
 .chapter-row {
   display: grid;
-  grid-template-columns: 22px 1fr auto auto 18px;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
   align-items: center;
   gap: 10px;
   padding: 7px 16px;
@@ -1827,8 +1875,21 @@ html.dark .flow-chapter {
   background: var(--accent);
 }
 
+.chapter-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
 .chapter-row-title {
   font-weight: 500;
+}
+
+.chapter-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .done-mark {
@@ -1865,27 +1926,46 @@ html.dark .flow-chapter {
   padding: 10px 12px;
   background: var(--agent-surface);
   border-radius: var(--radius-sm);
+}
+
+.agent-summary-text {
   font-size: 13px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-summary.is-open .agent-summary-text {
+  display: block;
+}
+
+.agent-summary .link-btn {
+  margin-top: 4px;
 }
 
 .finding-row {
-  display: grid;
-  grid-template-columns: 68px 1fr auto;
-  align-items: start;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 9px 16px;
   border-top: 1px solid var(--border);
 }
 
-.finding-row .sev {
-  justify-self: start;
-  margin-top: 1px;
+.finding-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.finding-row-body {
-  display: flex;
-  flex-direction: column;
+.finding-row-path {
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .finding-row-text {

@@ -1,5 +1,5 @@
 import { Check, Sparkles } from "lucide-react";
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { pad2, plural, SEVERITY_ORDER } from "../lib/format";
 import { Inline, Markdown } from "../lib/markdown";
 import type { FocusTarget, Jump } from "../lib/review-context";
@@ -35,7 +35,7 @@ export function OverviewTab({
 
   return (
     <div className="overview">
-      <div className="overview-top">
+      <div className="overview-main">
         <div className="overview-text">
           <h2>Overview</h2>
           {guide ? (
@@ -60,20 +60,29 @@ export function OverviewTab({
             </div>
           )}
         </div>
-        <div className="overview-flows">
-          {guide?.overview.flows.map((flow, i) => (
-            <FlowDiagram
-              key={i}
-              flow={flow}
-              sessionId={session.id}
-              chapterNumbers={chapterNumbers}
-              onJump={onJump}
-            />
-          ))}
-        </div>
+        {guide && guide.overview.flows.length > 0 && (
+          <div className="overview-flows">
+            {guide.overview.flows.map((flow, i) => (
+              <FlowDiagram
+                key={i}
+                flow={flow}
+                sessionId={session.id}
+                chapterNumbers={chapterNumbers}
+                onJump={onJump}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="overview-bottom">
+      <aside className="overview-side">
+        <FindingsSummary
+          session={session}
+          findings={findings}
+          human={human}
+          chapterOf={chapterOf}
+          onJump={onJump}
+        />
         {guide && (
           <section className="card list-card">
             <div className="list-card-head">
@@ -92,9 +101,15 @@ export function OverviewTab({
                     onClick={jumpOnClick(onJump, "Chapters")}
                   >
                     <span className="mono muted">{pad2(i + 1)}</span>
-                    <span className="chapter-row-title">{c.title}</span>
-                    <span className={`role role-${c.role}`}>{c.role}</span>
-                    <span className="muted small">{plural(c.files.length, "file")}</span>
+                    <span className="chapter-row-body">
+                      <span className="chapter-row-title">{c.title}</span>
+                      <span className="chapter-row-meta">
+                        <span className={`role role-${c.role}`}>{c.role}</span>
+                        <span className="muted small">
+                          {plural(c.files.length, "file")}
+                        </span>
+                      </span>
+                    </span>
                     <span
                       className={`done-mark ${human.chapters[c.id] ? "is-done" : ""}`}
                       title={human.chapters[c.id] ? "Reviewed" : "Not reviewed"}
@@ -107,17 +122,13 @@ export function OverviewTab({
             </ul>
           </section>
         )}
-        <FindingsSummary
-          session={session}
-          findings={findings}
-          human={human}
-          chapterOf={chapterOf}
-          onJump={onJump}
-        />
-      </div>
+      </aside>
     </div>
   );
 }
+
+/** About 4 lines of the side panel; a longer summary starts clamped. */
+const SUMMARY_CLAMP_CHARS = 220;
 
 function FindingsSummary({
   session,
@@ -138,6 +149,7 @@ function FindingsSummary({
       SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity),
   );
   const summary = session.review.value?.summary;
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   return (
     <section className="card list-card">
@@ -169,12 +181,25 @@ function FindingsSummary({
         })}
       </div>
       {summary && (
-        <div className="prose agent-summary">
-          <Markdown text={summary} />
+        <div className={`agent-summary ${summaryOpen ? "is-open" : ""}`}>
+          <div className="prose agent-summary-text">
+            <Markdown text={summary} />
+          </div>
+          {summary.length > SUMMARY_CLAMP_CHARS && (
+            <button
+              type="button"
+              className="link-btn small"
+              onClick={() => setSummaryOpen((open) => !open)}
+            >
+              {summaryOpen ? "Show less" : "Show more"}
+            </button>
+          )}
         </div>
       )}
       {sorted.length === 0 && !session.review.error && (
-        <p className="muted small">The agent found nothing to flag.</p>
+        <p className="muted small list-card-note">
+          The agent found nothing to flag.
+        </p>
       )}
       <ul className="finding-list">
         {sorted.map((f) => {
@@ -194,17 +219,20 @@ function FindingsSummary({
                   path: f.path,
                 })}
               >
-                <span className={`sev sev-${f.severity}`}>{f.severity}</span>
-                <span className="finding-row-body">
-                  <span className="mono small muted">
-                    {f.path}:{f.line}
+                <span className="finding-row-head">
+                  <span className={`sev sev-${f.severity}`}>{f.severity}</span>
+                  <span
+                    className="mono small muted finding-row-path"
+                    title={`${f.path}:${f.line}`}
+                  >
+                    {f.path.split("/").pop()}:{f.line}
                   </span>
-                  <span className="finding-row-text">
-                    <Inline text={f.body.split("\n")[0]!} />
+                  <span className={`verdict-tag verdict-tag-${verdict ?? "none"}`}>
+                    {verdict ?? "unchecked"}
                   </span>
                 </span>
-                <span className={`verdict-tag verdict-tag-${verdict ?? "none"}`}>
-                  {verdict ?? "unchecked"}
+                <span className="finding-row-text">
+                  <Inline text={f.body.split("\n")[0]!} />
                 </span>
               </a>
             </li>

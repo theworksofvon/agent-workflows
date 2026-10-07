@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Overview Layout with a Side Panel
+
+Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Fit the overview of a guided review on the screen and align its parts.
+Message: The overview now has 2 columns: the PR's story on the left and a side panel with the agent findings and the chapters on the right. The side panel stays in view while the story scrolls.
+Added/Changed: Each flow is a vertical list of steps on a rail, with one step per row and the chapter number at the right, in place of a wrapped row of boxes and arrows. A flow's caption sits under its title row. A chapter row shows its role and file count under its title. A finding row shows the severity, the file name and line (the full path in a tooltip), and your verdict on one line, and the finding text under it. The agent summary shows 4 lines, with "Show more" when it is longer. Below 1100 px the side panel moves under the story.
+Fixed/Removed: Long file paths no longer overflow the findings card, and the role tags and file counts of the chapters no longer stand at different positions.
+Handoff: Run `mise run web:build`; a running app serves the new build without a restart.
+
 ### Test the Real App Through Its API
 
 Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
