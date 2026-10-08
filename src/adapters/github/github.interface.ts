@@ -1,78 +1,63 @@
 import type {
+  Account,
+  Check,
+  CheckStatus,
+  PullCard,
+  PullDetail,
+} from "../../domain/inbox.js";
+import type {
   PullRequest,
   PullRequestFile,
   RepoRef,
-} from "../../domain/events.js";
+} from "../../domain/pull-request.js";
 
-export interface IssueCommentRecord {
-  id: number;
-  author: string;
-  body: string;
-  createdAt: string;
-}
-export interface ReviewCommentRecord extends IssueCommentRecord {
-  path: string;
-  line: number | null;
-  originalLine: number | null;
-  diffHunk: string;
-  reviewId: number | null;
-}
 export interface ReviewCommentDraft {
   path: string;
   line: number;
   body: string;
 }
-export interface HookRecord {
-  id: number;
-  url: string;
-  events: string[];
-  active: boolean;
+
+/** One search's pull requests, with what limited them. */
+export interface PullSearch {
+  pulls: PullCard[];
+  /** GitHub matched more than `first`. */
+  truncated: boolean;
+  /** Errors GitHub returned beside partial data, such as an SSO-protected org. */
+  warnings: string[];
 }
-export interface HookDelivery {
-  id: number;
-  event: string;
-  statusCode: number;
-  deliveredAt: string;
-  redelivery: boolean;
+
+export interface PullChecks {
+  headSha: string;
+  checks: Check[];
+  /** More contexts exist than the pages read. */
+  truncated: boolean;
+  /** GitHub's own rollup of every context, or null without one. */
+  overall: CheckStatus | null;
 }
 
 export interface GitHubPort {
-  listOpenPRs(repo: RepoRef): Promise<PullRequest[]>;
+  viewer(): Promise<Account>;
+  /** Throws RateLimitedError when the account hit a rate limit. */
+  searchPullRequests(query: string, first: number): Promise<PullSearch>;
+  listRepoPullRequests(repo: RepoRef, first: number): Promise<PullCard[]>;
+  getPullRequestDetail(repo: RepoRef, prNumber: number): Promise<PullDetail>;
+  getPullRequestChecks(repo: RepoRef, prNumber: number): Promise<PullChecks>;
   getPullRequest(repo: RepoRef, prNumber: number): Promise<PullRequest>;
-  listIssueComments(
-    repo: RepoRef,
-    prNumber: number,
-  ): Promise<IssueCommentRecord[]>;
-  listReviewComments(
-    repo: RepoRef,
-    prNumber: number,
-  ): Promise<ReviewCommentRecord[]>;
   listPullRequestFiles(
     repo: RepoRef,
     prNumber: number,
   ): Promise<PullRequestFile[]>;
-  createComment(repo: RepoRef, prNumber: number, body: string): Promise<void>;
-  replyToReviewComment(
-    repo: RepoRef,
-    prNumber: number,
-    commentId: number,
-    body: string,
-  ): Promise<void>;
   createPullRequestReview(args: {
     repo: RepoRef;
     prNumber: number;
     body: string;
     comments: ReviewCommentDraft[];
+    /** Defaults to COMMENT. */
+    event?: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+    /**
+     * The commit the comment lines refer to. Without it GitHub maps each
+     * line against the current head, which can differ from the reviewed one.
+     */
+    commitId?: string;
   }): Promise<void>;
-  listHooks(repo: RepoRef): Promise<HookRecord[]>;
-  createHook(
-    repo: RepoRef,
-    args: { url: string; secret: string; events: string[] },
-  ): Promise<HookRecord>;
-  updateHook(
-    repo: RepoRef,
-    hookId: number,
-    args: { url: string; secret: string; events: string[] },
-  ): Promise<HookRecord>;
-  listHookDeliveries(repo: RepoRef, hookId: number): Promise<HookDelivery[]>;
 }

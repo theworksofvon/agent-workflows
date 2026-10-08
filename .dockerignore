@@ -1,0 +1,14 @@
+# Allowlist: the build context holds only what the image build reads, so
+# .env, docker.env, state, and credentials can never enter it.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!src/
+!scripts/
+!web/
+web/node_modules
+web/dist
+**/.env*
+**/*.env

@@ -35,7 +35,7 @@ if (!existsSync(envPath)) {
 }
 
 console.log(
-  "\nSetup complete. Edit .env, authenticate the selected agent CLI, install the pr-feedback and pr-reviewer skills from vstack into your harness, then run: mise run doctor",
+  "\nSetup complete. Edit .env, authenticate the selected agent CLI, install the pr-reviewer skill from vstack into your harness, then run: mise run doctor",
 );
 
 function run(command, args) {

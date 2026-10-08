@@ -1,73 +1,70 @@
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import type { DatabaseSync } from "node:sqlite";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import type { Config, ReviewAdversarialMode } from "./config.js";
 import { GitHubClient } from "./adapters/github/octokit.js";
-import { pollRepos } from "./services/poll.js";
-import { sqliteState } from "./adapters/state/sqlite.js";
-import { gitExec } from "./adapters/git/exec.js";
-import type { StateFactory } from "./adapters/state/state.interface.js";
-import type { GitPort } from "./adapters/git/git.interface.js";
-import type { CommentBatch, RawDelivery, RepoRef } from "./domain/events.js";
+import {
+  ghAccounts,
+  type GitHubAccountsPort,
+} from "./adapters/github/accounts.js";
+import { sqliteSettings } from "./adapters/state/settings.js";
+import { githubAccess } from "./services/github-access.js";
+import type { Account } from "./domain/inbox.js";
+import { openStateDatabase, sqliteState } from "./adapters/state/sqlite.js";
+import {
+  sqliteReviewSessions,
+  type ReviewSessionStore,
+} from "./adapters/state/review-sessions.js";
+import { startReviewServer } from "./adapters/http/review-server.js";
+import type { ServerHandle } from "./adapters/http/http-util.js";
+import {
+  GUIDED_RUN_SLOTS,
+  runGuidedReview,
+  type GuidedReviewDeps,
+} from "./services/guided-review.js";
+import { reviewApi, type ReviewApi } from "./services/review-api.js";
+import { reviewEvents } from "./services/review-events.js";
+import { t3Link } from "./services/t3-link.js";
+import { sqliteT3Threads } from "./adapters/state/t3-threads.js";
+import { connectT3 } from "./adapters/t3/t3-client.js";
+import { gitExec, scrubRepoCacheCredentials } from "./adapters/git/exec.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
-import { Daemon } from "./services/daemon.js";
-import {
-  handleFeedback,
-  type FeedbackPorts,
-} from "./services/handle-feedback.js";
+import { Dispatcher } from "./services/dispatch.js";
 import { log } from "./log.js";
 import { parseReviewTarget } from "./domain/target.js";
 import { reviewPullRequest } from "./services/review-pr.js";
-import { receiveDelivery, takeReadyBatches } from "./services/webhook.js";
-import { startWebhookListener } from "./adapters/http/listener.js";
 import type { ReviewRunResult } from "./services/review-pr.js";
-import { tailscaleCli } from "./adapters/tailscale/cli.js";
-import type { TailscalePort } from "./adapters/tailscale/tailscale.interface.js";
-import { defaultDeps, serviceManagerFor } from "./adapters/service/index.js";
-import type {
-  ServiceManagerPort,
-  ServiceSpec,
-} from "./adapters/service/service.interface.js";
-import {
-  installWebhooks,
-  webhookStatus,
-  type InstallResult,
-  type StatusResult,
-} from "./services/webhooks-admin.js";
+import { errorMessage } from "./domain/util.js";
+import { ServerStoppedError } from "./domain/errors.js";
 
 export interface CliDependencies {
-  loadConfig(options: { requireRepos: boolean }): Config;
-  createClient(token: string): GitHubClient;
+  loadConfig(): Config;
+  createClient(token: string, apiUrl: string): GitHubClient;
+  /**
+   * The GitHub accounts the guided review app can act as; `lookupUser` is
+   * GET /user with a token.
+   */
+  accounts(
+    config: Config,
+    lookupUser: (token: string) => Promise<Account>,
+  ): GitHubAccountsPort;
   getAgent(name: string, config: Config): AgentAdapter;
-  createPoll(args: {
-    config: Config;
-    client: GitHubClient;
-    state?: StateFactory;
-  }): () => Promise<CommentBatch[]>;
-  createDaemon(args: {
-    config: Config;
-    poll: () => Promise<CommentBatch[]>;
-    client: GitHubClient;
-    agent: AgentAdapter;
-    git?: GitPort;
-    state?: StateFactory;
-  }): Pick<Daemon, "start" | "stop" | "dispatchEvents" | "idle">;
   reviewPullRequest: typeof reviewPullRequest;
-  tailscale: TailscalePort;
-  installWebhooks(args: {
-    config: Config;
-    github: GitHubClient;
-    publicUrl: string;
-  }): Promise<InstallResult[]>;
-  webhookStatus(args: {
-    config: Config;
-    github: GitHubClient;
-    publicUrl: string;
-  }): Promise<StatusResult[]>;
-  serviceManager: ServiceManagerPort;
-  fileExists(path: string): boolean;
+  startReviewServer(args: {
+    host: string;
+    port: number;
+    publicPort: number;
+    api: ReviewApi;
+  }): Promise<ServerHandle>;
+  /** Calls `fn` every `ms` without keeping the process alive; returns a stop. */
+  every(ms: number, fn: () => void): () => void;
+  /**
+   * How long shutdown waits for running guided runs. Runs still going after
+   * it are marked failed.
+   */
+  shutdownGraceMs: number;
   onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   exit(code: number): void;
   writeLine(line: string): void;
@@ -75,70 +72,18 @@ export interface CliDependencies {
 
 export const defaultCliDependencies: CliDependencies = {
   loadConfig,
-  createClient: (token) => new GitHubClient(token),
+  createClient: (token, apiUrl) => new GitHubClient(token, { baseUrl: apiUrl }),
+  accounts: (config, lookupUser) =>
+    ghAccounts({ fallbackToken: config.githubToken, lookupUser }),
   getAgent,
-  createPoll: ({ config, client, state = sqliteState(config) }) => {
-    return () => pollRepos({ config, client, state });
-  },
-  createDaemon: ({
-    config,
-    poll,
-    client,
-    agent,
-    git = gitExec,
-    state = sqliteState(config),
-  }) => {
-    const ports: FeedbackPorts = {
-      config,
-      agent,
-      git,
-      github: client,
-      state,
-    };
-    // Tailscale Funnel or a configured public URL is what makes the listener reachable.
-    const webhooksEnabled = config.publicUrl !== null || config.tailscaleFunnel;
-    const webhooks = webhooksEnabled
-      ? {
-          listener: { host: config.host, port: config.port },
-          receiveDelivery: (delivery: RawDelivery) =>
-            receiveDelivery(delivery, { config, github: client, state }),
-          startListener: startWebhookListener,
-          takeReady: (repo: RepoRef) =>
-            takeReadyBatches(repo, { config, state }),
-        }
-      : {};
-    return new Daemon({
-      config,
-      poll,
-      ...webhooks,
-      handleBatch: (batch) => handleFeedback(batch, ports),
-      reviewPullRequest: (target) =>
-        reviewPullRequest({
-          config,
-          github: client,
-          git,
-          state,
-          agent,
-          adversarialAgent: adversarialAgentFor(
-            config.reviewAdversarialMode,
-            config,
-            getAgent,
-          ),
-          adversarialMode: config.reviewAdversarialMode,
-          target,
-          post: true,
-        }),
-    });
-  },
   reviewPullRequest,
-  tailscale: tailscaleCli(),
-  installWebhooks,
-  webhookStatus,
-  // Lazy so unsupported platforms only fail when `service` is actually used.
-  get serviceManager() {
-    return serviceManagerFor(process.platform, defaultDeps());
+  startReviewServer,
+  every: (ms, fn) => {
+    const timer = setInterval(fn, ms);
+    timer.unref();
+    return () => clearInterval(timer);
   },
-  fileExists: existsSync,
+  shutdownGraceMs: 15_000,
   onSignal: process.on.bind(process),
   exit: process.exit.bind(process),
   writeLine: console.log,
@@ -154,179 +99,261 @@ function adversarialAgentFor(
     : resolve(config.reviewAdversarialAgent, config);
 }
 
+const HELP_FLAGS = ["--help", "-h", "help"];
+
 export async function runCli(
   args: string[],
   dependencies: CliDependencies = defaultCliDependencies,
 ): Promise<void> {
-  if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
+  const [command, ...rest] = args;
+  if (command !== undefined && HELP_FLAGS.includes(command)) {
     printHelp(dependencies.writeLine);
     return;
   }
-  if (args[0] === "review") {
-    if (args[1] === "--help" || args[1] === "-h" || args[1] === "help") {
+  if (command === "review") {
+    if (rest[0] !== undefined && HELP_FLAGS.includes(rest[0])) {
       printHelp(dependencies.writeLine);
       return;
     }
-    await runReviewCommand(args.slice(1), dependencies);
+    await runReviewCommand(rest, dependencies);
     return;
   }
-  if (args[0] === "webhooks") {
-    await runWebhooksCommand(args.slice(1), dependencies);
+  if (command === "open") return runOpenCommand(rest, dependencies);
+  if (command === undefined) return runStartCommand([], dependencies);
+  // `ui` is the name earlier versions used for `start`.
+  if (command === "start" || command === "ui")
+    return runStartCommand(rest, dependencies);
+  throw new Error(`Unknown command: ${command}`);
+}
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
+
+/** Daily, so a long-running app still drops old guided review sessions. */
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Serves the guided review app and API, and runs each requested review in
+ * the background until SIGINT or SIGTERM.
+ */
+export async function runStartCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
+  const [option] = args;
+  if (option !== undefined && HELP_FLAGS.includes(option)) {
+    printHelp(dependencies.writeLine);
     return;
   }
-  if (args[0] === "service") {
-    await runServiceCommand(args.slice(1), dependencies);
-    return;
-  }
+  if (option !== undefined) throw new Error(`Unknown start option: ${option}`);
 
-  const config = dependencies.loadConfig({ requireRepos: true });
-  const client = dependencies.createClient(config.githubToken);
-  const agent = dependencies.getAgent(config.agent, config);
-
-  // Poll and handlers share one database connection and one store per repo.
-  // Only the daemon requeues batches a previous run left in flight.
-  const state = sqliteState(config, { recoverInFlight: true });
-  const poll = dependencies.createPoll({ config, client, state });
-  const daemon = dependencies.createDaemon({
-    config,
-    poll,
-    client,
-    agent,
-    state,
-  });
-
-  const stop = (sig: "SIGINT" | "SIGTERM") => {
-    log.info("shutting down", { signal: sig });
-    void (async () => {
-      try {
-        await daemon.stop();
-      } catch (err) {
-        log.error("daemon stop failed", { error: describe(err) });
-      }
-      await funnelOff(config, dependencies.tailscale);
-      dependencies.exit(0);
-    })();
-  };
-  dependencies.onSignal("SIGINT", () => stop("SIGINT"));
-  dependencies.onSignal("SIGTERM", () => stop("SIGTERM"));
-
+  const config = dependencies.loadConfig();
+  scrubCredentials(config);
+  const db = openStateDatabase(config.stateDir);
+  const runs = new Dispatcher(config.maxConcurrentRuns);
+  let ui: GuidedReviewService;
   try {
-    if (config.tailscaleFunnel) {
-      const url = await dependencies.tailscale.funnelOn(config.port);
-      log.info("tailscale funnel on", { url });
-    }
-    await daemon.start();
+    ui = await startGuidedReview(config, db, runs, dependencies);
   } catch (err) {
-    // funnelOn can fail after `funnel --bg` already took effect.
-    await funnelOff(config, dependencies.tailscale);
+    db.close();
     throw err;
   }
+  // The app stops taking requests and finishes its publishes, the runs get
+  // the shutdown grace to finish, and the runs that outlive it are marked
+  // failed and stop writing before the database closes.
+  let stopping = false;
+  const stop = async (signal: "SIGINT" | "SIGTERM") => {
+    if (stopping) return;
+    stopping = true;
+    log.info("shutting down", { signal });
+    await closeUi(ui);
+    await runs.drain(dependencies.shutdownGraceMs);
+    ui.release();
+    db.close();
+    dependencies.exit(0);
+  };
+  dependencies.onSignal("SIGINT", () => void stop("SIGINT"));
+  dependencies.onSignal("SIGTERM", () => void stop("SIGTERM"));
+  // Printed last: the address tells a caller that a signal now shuts down cleanly.
+  dependencies.writeLine(`Guided review: ${ui.url}`);
 }
 
-function describe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-async function funnelOff(config: Config, tailscale: TailscalePort) {
-  if (!config.tailscaleFunnel) return;
+/** Removes tokens that older versions stored in the repo caches' remote URLs. */
+function scrubCredentials(config: Config): void {
   try {
-    await tailscale.funnelOff(config.port);
+    scrubRepoCacheCredentials(config.stateDir);
   } catch (err) {
-    log.error("tailscale funnel off failed", { error: describe(err) });
+    log.warn("could not check the repo caches for stored credentials", {
+      error: errorMessage(err),
+    });
   }
 }
 
-export async function runWebhooksCommand(
-  args: string[],
-  dependencies: CliDependencies = defaultCliDependencies,
-): Promise<void> {
-  const [command] = args;
-  if (command === "--help" || command === "-h" || command === "help") {
-    printHelp(dependencies.writeLine);
-    return;
-  }
-  if (command !== "install" && command !== "status") {
-    throw new Error(`Unknown webhooks command: ${command ?? ""}`);
-  }
-  const config = dependencies.loadConfig({ requireRepos: true });
-  const github = dependencies.createClient(config.githubToken);
-  // Install turns Funnel on because GitHub cannot reach the daemon without it.
-  const publicUrl =
-    config.publicUrl ??
-    (config.tailscaleFunnel
-      ? command === "install"
-        ? await dependencies.tailscale.funnelOn(config.port)
-        : await dependencies.tailscale.currentUrl()
-      : null);
-  if (publicUrl === null) {
-    throw new Error("Set PUBLIC_URL or TAILSCALE_FUNNEL=true to use webhooks.");
-  }
+interface GuidedReviewService {
+  url: string;
+  /** Stops taking requests and waits for every publish in flight. */
+  close(): Promise<void>;
+  /**
+   * Fails the guided runs that are still going and stops their writes, so
+   * the database can close.
+   */
+  release(): void;
+}
 
-  if (command === "install") {
-    const results = await dependencies.installWebhooks({
-      config,
-      github,
-      publicUrl,
-    });
-    for (const r of results) {
-      dependencies.writeLine(
-        `${r.action} ${r.repo.owner}/${r.repo.repo} -> ${r.url} (hook ${r.hookId})`,
-      );
-    }
-    return;
-  }
-  const results = await dependencies.webhookStatus({
+/**
+ * Fails sessions a previous process left running, prunes old sessions now
+ * and once a day, records the current account on sessions stored without
+ * one, and serves the guided review app on UI_HOST:UI_PORT. Runs past
+ * MAX_CONCURRENT_RUNS wait on `runs` with status "queued".
+ */
+async function startGuidedReview(
+  config: Config,
+  db: DatabaseSync,
+  runs: Dispatcher,
+  dependencies: CliDependencies,
+): Promise<GuidedReviewService> {
+  if (!LOOPBACK_HOSTS.includes(config.uiHost))
+    log.warn(
+      "UI_HOST is not a loopback address: the guided review app has no login, so anyone who can reach it can publish reviews as you",
+      { uiHost: config.uiHost },
+    );
+  const sessions = sqliteReviewSessions(db);
+  failInterrupted(sessions);
+  let released = false;
+  const prune = () => {
+    const pruned = sessions.prune();
+    if (pruned > 0) log.info("pruned old guided reviews", { count: pruned });
+  };
+  prune();
+  const accounts = ghAccountsOf(config, dependencies);
+  const github = githubAccess({
+    accounts,
+    settings: sqliteSettings(db),
+    createClient: (token) =>
+      dependencies.createClient(token, config.githubApiUrl),
+  });
+  void adoptAccount(sessions, github, accounts);
+  // A deep triage runs the adversarial pass even when the mode is "off".
+  const deps: GuidedReviewDeps = {
     config,
     github,
-    publicUrl,
+    git: gitExec,
+    sessions: untilReleased(sessions, () => released),
+    agent: dependencies.getAgent(config.agent, config),
+    adversarialAgent: dependencies.getAgent(
+      config.reviewAdversarialAgent,
+      config,
+    ),
+  };
+  const api = reviewApi({
+    sessions,
+    github,
+    startRun: async (id) => {
+      runs.enqueue(
+        `guide:${id}`,
+        () => runGuidedReview(id, deps),
+        GUIDED_RUN_SLOTS,
+      );
+    },
+    agent: config.agent,
+    events: reviewEvents(),
+    t3: t3Link({
+      settings: sqliteSettings(db),
+      threads: sqliteT3Threads(db),
+      defaultMcpUrl: config.t3McpUrl,
+      model: config.t3Model,
+      appUrl: `http://127.0.0.1:${config.uiPublicPort}`,
+      connect: connectT3,
+    }),
   });
-  for (const r of results) {
-    const slug = `${r.repo.owner}/${r.repo.repo}`;
-    if (r.hookId === null) {
-      dependencies.writeLine(`${slug}:`);
-      dependencies.writeLine("  (no hook)");
-      continue;
+  const server = await dependencies.startReviewServer({
+    host: config.uiHost,
+    port: config.uiPort,
+    publicPort: config.uiPublicPort,
+    api,
+  });
+  const stopPruning = dependencies.every(PRUNE_INTERVAL_MS, prune);
+  return {
+    url: server.url,
+    close: async () => {
+      stopPruning();
+      try {
+        await server.close();
+      } finally {
+        await api.settled();
+      }
+    },
+    release: () => {
+      released = true;
+      failInterrupted(sessions);
+    },
+  };
+}
+
+function failInterrupted(sessions: ReviewSessionStore): void {
+  const interrupted = sessions.failInterrupted();
+  if (interrupted > 0)
+    log.warn("marked interrupted guided reviews as failed", {
+      count: interrupted,
+    });
+}
+
+/** A guided run's reads and writes throw ServerStoppedError after release. */
+function untilReleased(
+  store: ReviewSessionStore,
+  released: () => boolean,
+): ReviewSessionStore {
+  const open = () => {
+    if (released()) throw new ServerStoppedError();
+  };
+  return {
+    ...store,
+    get: (id) => {
+      open();
+      return store.get(id);
+    },
+    update: (id, patch) => {
+      open();
+      return store.update(id, patch);
+    },
+  };
+}
+
+/**
+ * Records gh's current account on sessions stored without one. GITHUB_TOKEN's
+ * account is only a stand-in, so it is never recorded.
+ */
+async function adoptAccount(
+  sessions: ReviewSessionStore,
+  github: ReturnType<typeof githubAccess>,
+  accounts: GitHubAccountsPort,
+): Promise<void> {
+  try {
+    if (await accounts.isFallback()) {
+      log.info(
+        "not recording an account on older guided reviews: gh has no account",
+      );
+      return;
     }
-    dependencies.writeLine(`${slug}: hook ${r.hookId} ${r.url}`);
-    for (const d of r.deliveries.slice(0, 10)) {
-      dependencies.writeLine(`  ${d.deliveredAt} ${d.event} ${d.statusCode}`);
-    }
+    const login = await github.current();
+    const adopted = sessions.adoptAccount(login);
+    if (adopted > 0)
+      log.info("recorded the account on older guided reviews", {
+        count: adopted,
+        account: login,
+      });
+  } catch (err) {
+    log.warn("could not resolve the current GitHub account", {
+      error: errorMessage(err),
+    });
   }
 }
 
-export async function runServiceCommand(
-  args: string[],
-  dependencies: CliDependencies = defaultCliDependencies,
-): Promise<void> {
-  const [command] = args;
-  if (command === "--help" || command === "-h" || command === "help") {
-    printHelp(dependencies.writeLine);
-    return;
+async function closeUi(ui: GuidedReviewService): Promise<void> {
+  try {
+    await ui.close();
+  } catch (err) {
+    log.error("review server close failed", { error: errorMessage(err) });
   }
-  if (command !== "install" && command !== "uninstall") {
-    throw new Error(`Unknown service command: ${command ?? ""}`);
-  }
-  const config = dependencies.loadConfig({ requireRepos: false });
-  const spec: ServiceSpec = {
-    label: "com.theworksofvon.agent-workflows",
-    nodePath: process.execPath,
-    // Resolves to dist/main.js from both dist/ and src/, so the unit never points at TypeScript.
-    entryPath: fileURLToPath(new URL("../dist/main.js", import.meta.url)),
-    cwd: process.cwd(),
-    logDir: join(config.stateDir, "logs"),
-  };
-  const manager = dependencies.serviceManager;
-  if (command === "install") {
-    if (!dependencies.fileExists(spec.entryPath)) {
-      throw new Error(
-        `Build first: ${spec.entryPath} does not exist (run mise run build).`,
-      );
-    }
-    dependencies.writeLine(`Installed ${await manager.install(spec)}`);
-    return;
-  }
-  await manager.uninstall(spec);
-  dependencies.writeLine(`Removed ${manager.unitPath(spec)}`);
 }
 
 export function printHelp(
@@ -336,16 +363,71 @@ export function printHelp(
 
 Usage:
   pnpm start
-  pnpm review owner/repo#123 [--post] [--adversarial|--no-adversarial]
-  pnpm agent-workflows webhooks install|status
-  pnpm agent-workflows service install|uninstall
+  pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
+  pnpm agent-workflows open owner/repo#123
 
 Commands:
-  daemon   Poll configured repositories and process ready comment batches (default)
+  start    Serve the guided review app and API on UI_HOST:UI_PORT (default 127.0.0.1:4773).
+           This is the default command; ui is an alias.
+  open     Start a guided review of a PR in the running app and open it in its T3 thread
   review   Run a read-only pull-request review; add --post to publish findings
-  webhooks Register (install) or inspect (status) the GitHub webhook on every watched repo
-  service  Install or remove the daemon as a launchd agent (macOS) or systemd user unit (Linux)
   help     Show this message`);
+}
+
+/** How long `open` waits for the agents to finish a guided review. */
+const OPEN_WAIT_MS = 15 * 60 * 1000;
+const OPEN_POLL_MS = 1000;
+
+/**
+ * Asks the running app to review a PR, waits for the run, and opens the
+ * review in its T3 thread. It starts no server: `start` must be running.
+ */
+export async function runOpenCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
+  const [target, ...extra] = args;
+  if (!target || extra.length > 0 || target.startsWith("-"))
+    throw new Error("Usage: pnpm agent-workflows open owner/repo#123");
+  const config = dependencies.loadConfig();
+  const base = `http://127.0.0.1:${config.uiPublicPort}/api`;
+  const call = async (method: string, path: string, body?: unknown) => {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/${path}`, {
+        method,
+        headers:
+          body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      throw new Error(
+        `The review app is not running at ${base}. Start it with mise run start.`,
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) throw new Error(String(data.error ?? res.status));
+    return data;
+  };
+  const { id } = (await call("POST", "sessions", { target })) as { id: string };
+  dependencies.writeLine(`Review started: ${id}`);
+  const deadline = Date.now() + OPEN_WAIT_MS;
+  for (;;) {
+    const { session } = (await call("GET", `sessions/${id}`)) as {
+      session: { status: string; error: string | null };
+    };
+    if (session.status === "failed")
+      throw new Error(`The review failed: ${session.error}`);
+    if (session.status === "ready") break;
+    if (Date.now() > deadline)
+      throw new Error(`The review is still running: ${id}`);
+    await new Promise((done) => setTimeout(done, OPEN_POLL_MS));
+  }
+  const { thread } = (await call("POST", `sessions/${id}/t3`)) as {
+    thread: { title: string; url: string | null };
+  };
+  dependencies.writeLine(`Opened in T3: ${thread.title}`);
+  if (thread.url) dependencies.writeLine(thread.url);
 }
 
 export async function runReviewCommand(
@@ -386,8 +468,10 @@ export async function runReviewCommand(
     throw new Error("Use either --adversarial or --no-adversarial, not both.");
   }
 
-  const config = dependencies.loadConfig({ requireRepos: false });
-  const client = dependencies.createClient(config.githubToken);
+  const config = dependencies.loadConfig();
+  const token =
+    config.githubToken ?? (await activeGhToken(config, dependencies));
+  const client = dependencies.createClient(token, config.githubApiUrl);
   const agent = dependencies.getAgent(config.agent, config);
   const adversarialMode: ReviewAdversarialMode = forceAdversarial
     ? "always"
@@ -409,8 +493,27 @@ export async function runReviewCommand(
     adversarialMode,
     target: parseReviewTarget(targetArg),
     post,
+    token,
   });
   printReviewResult(result, dependencies.writeLine);
+}
+
+/** Without GITHUB_TOKEN, `review` acts as gh's active account. */
+async function activeGhToken(
+  config: Config,
+  dependencies: CliDependencies,
+): Promise<string> {
+  const accounts = ghAccountsOf(config, dependencies);
+  return accounts.token(await accounts.active());
+}
+
+function ghAccountsOf(
+  config: Config,
+  dependencies: CliDependencies,
+): GitHubAccountsPort {
+  return dependencies.accounts(config, (token) =>
+    dependencies.createClient(token, config.githubApiUrl).viewer(),
+  );
 }
 
 export function printReviewResult(
