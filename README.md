@@ -193,6 +193,7 @@ docker compose run --rm app node dist/main.js review owner/repo#123
 ```text
 pnpm start
 pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
+pnpm agent-workflows open owner/repo#123
 ```
 
 | Command                                    | Purpose                                                                        |
@@ -201,6 +202,7 @@ pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
 | `pnpm review owner/repo#123`               | Review a PR locally without posting or changing files.                         |
 | `pnpm review owner/repo#123 --post`        | Post the new findings as one grouped review.                                   |
 | `pnpm review owner/repo#123 --adversarial` | Force the adversarial pass; `--no-adversarial` skips it.                       |
+| `pnpm agent-workflows open owner/repo#123` | Start a guided review in the running app and open it in its T3 thread.         |
 | `mise run start`                           | Build, then serve the app (alias `ui`).                                        |
 | `mise run dev`                             | Run from source and restart on change.                                         |
 | `mise run web:dev`                         | Run the web app with hot reload against the app on port 4773.                  |
@@ -213,9 +215,8 @@ Review targets can also be full GitHub PR URLs. See
 The overview ranks the open PRs in your inbox. A review splits the diff into
 chapters, ordered core-first, with agent findings inline on the lines they
 concern. You mark each finding agree, disagree, or unsure, with a reason, and
-add your own comments. "Discuss in T3" copies a prompt for that finding to the
-clipboard. Publishing shows a preview first and then posts one combined
-GitHub review.
+add your own comments. Publishing shows a preview first and then posts one
+combined GitHub review.
 
 - The review pins the head commit that the agents read, so its lines match
   that commit.
@@ -225,6 +226,65 @@ GitHub review.
   reviewer reuses the reviewer's worktree. Fork PRs are refused.
 - Agents run through the configured `AGENT` CLI, so they use your
   subscription and not an API key.
+
+### Discuss a review in T3 Code
+
+Each review can open in its own [T3 Code](https://github.com/pingdotgg/t3code)
+thread, with the review page in T3's preview pane beside the chat. The chat
+and the page share context:
+
+- When the agent records a verdict or a comment, the page shows it at once.
+- The agent knows what you have open: the tab, the finding, the file, and the
+  lines that you selected. "Why is this risky?" needs no file name.
+- Select lines in a diff, or use **Ask** on a finding, to send a question
+  about them to the thread.
+
+The thread belongs to 1 GitHub account's review of 1 PR. Its title is
+`Review: owner/repo#123 as <account>`, and every message names the account.
+A re-run of the PR goes to the same thread. The same PR reviewed as another
+account gets its own thread. When T3 has a project for the PR's repository,
+the thread opens in that project; otherwise it is a scratch thread.
+
+Connect T3 once:
+
+1. In T3, open **Settings → Connections**, open the environment's menu, and
+   choose **Copy MCP URL**. Set it as `T3_MCP_URL` in `.env`, or paste it in
+   the app when you click **Open in T3**.
+2. Click **Open in T3**, then **Connect**. T3 asks you to approve the sign-in;
+   choose **Supervised** or a broader mode. Read-only access cannot open
+   threads.
+
+The sign-in lasts 30 days, and T3 issues no refresh token, so connect again
+after it ends. The app keeps the token in its database and never shows or
+logs it. Without T3, **Copy prompt instead** copies a prompt for any agent.
+
+The agent in the thread uses the app's MCP server and the `guided-review`
+skill. Register the server once for each agent CLI:
+
+```bash
+claude mcp add --transport http guided-review http://127.0.0.1:4773/mcp
+codex mcp add guided-review --url http://127.0.0.1:4773/mcp
+```
+
+| Tool                              | What it does                                                  |
+| --------------------------------- | ------------------------------------------------------------- |
+| `get_review`                      | The PR, its account, the guide, the findings, and your state. |
+| `get_focus`                       | What you have open in the app now.                            |
+| `set_verdict`, `add_comment`      | Record your verdict on a finding, or your comment on a line.  |
+| `delete_comment`, `mark_reviewed` | Remove your comment, or mark a chapter or file reviewed.      |
+
+No tool publishes. You publish from the app.
+
+T3 actions run a saved command in a T3 terminal. 2 are useful here; add them
+in T3's project or environment settings:
+
+| Action           | Command                                                      |
+| ---------------- | ------------------------------------------------------------ |
+| Start review app | `mise run start` in this checkout, or `docker compose up -d` |
+| Review PR        | `read -r "pr?PR: " && pnpm agent-workflows open "$pr"`       |
+
+In Docker, the app reaches a T3 on the host at `host.docker.internal`, so set
+`T3_MCP_URL=http://host.docker.internal:3773/mcp`.
 
 ### Triage
 
@@ -275,6 +335,7 @@ and managed worktrees.
 | `CODEX_BIN`                | `codex`         | Codex executable.                                                              |
 | `CLAUDE_CODE_BIN`          | `claude`        | Claude Code executable.                                                        |
 | `LOG_LEVEL`                | `info`          | `debug`, `info`, `warn`, or `error`.                                           |
+| `T3_MCP_URL`               | unset           | T3 Code's MCP URL, until you enter another in the app.                         |
 
 The variables of the removed feedback bot (`REPOS`, `POLL_INTERVAL_SEC`,
 `HOST`, `PORT`, `WEBHOOK_SECRET`, `PUBLIC_URL`, `TAILSCALE_FUNNEL`,

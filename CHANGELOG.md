@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Review Threads in T3 Code
+
+Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Discuss a guided review in a T3 Code thread, with the review page beside the chat and context in both directions.
+Message: "Open in T3" now opens the review in its own T3 thread, 1 for each GitHub account and PR. The agent in the thread reads and changes the review through the app's new MCP server, the page updates when it does, and the agent knows which finding or lines you have open.
+Added/Changed: The app serves MCP at `/mcp` with `get_review`, `get_focus`, `set_verdict`, `add_comment`, `delete_comment`, and `mark_reviewed`; no tool publishes. The page listens on a server-sent events stream (`/api/sessions/:id/events`) and loads again when a write lands, from the API or from MCP. The page reports its focus (tab, chapter, finding, file, and selected diff lines) to `PUT /api/focus`, and `get_focus` returns it with the PR and the account. The app signs in to T3's outside-agent MCP endpoint with OAuth (dynamic client registration and PKCE) from a new Connect T3 dialog, and keeps the token in the `settings` table; `T3_MCP_URL` sets the URL. A new `t3_threads` table maps `account:owner/repo#number` to a T3 thread. Opening a review reuses that thread, finds it again by its title when the table lost it, or launches it in the T3 project whose GitHub repository is the PR's (a scratch thread otherwise). The thread title and every message name the account, and the first message tells the agent to open the review in T3's preview pane. A re-run tells the existing thread about the new session. "Ask in T3" on a diff selection or a finding sends a question about those lines to the thread. `agent-workflows open owner/repo#123` starts a review in the running app and opens its thread. The README documents the MCP registration and 2 T3 actions.
+Fixed/Removed: "Open in T3" no longer only copies a prompt; "Copy prompt instead" in the dialog keeps that for agents outside T3.
+Handoff: Restart the app and run `mise run web:build`. Connect T3 from "Open in T3" and approve the sign-in in T3 as Supervised or broader. Register the MCP server for each agent CLI (`claude mcp add --transport http guided-review http://127.0.0.1:4773/mcp`). The sign-in lasts 30 days; connect again after it ends. In Docker, set `T3_MCP_URL` to `host.docker.internal`; the thread link in the page then names that host, which a browser outside Docker cannot open.
+
 ### Flow Steps Open Their Code
 
 Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.
