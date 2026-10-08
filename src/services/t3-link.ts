@@ -38,6 +38,8 @@ export interface T3LinkPorts {
   defaultMcpUrl: string | null;
   /** The review app's address in the reviewer's browser. */
   appUrl: string;
+  /** T3 refuses a thread without a model when its project has no default. */
+  model: { instanceId: string; model: string };
   connect(mcpUrl: string, token: string): Promise<T3Tools>;
 }
 
@@ -170,6 +172,7 @@ export function t3Link(ports: T3LinkPorts) {
       const launched = (await t3.call("t3_thread_launch", {
         title,
         message: firstMessage(session, ports.appUrl),
+        modelSelection: ports.model,
         ...(projectId
           ? { projectId, workspaceStrategy: { type: "root" } }
           : { scratch: true }),

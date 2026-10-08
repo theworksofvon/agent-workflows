@@ -103,6 +103,10 @@ export async function startFakeT3(): Promise<FakeT3> {
           projectId: z.string().nullable().optional(),
           scratch: z.boolean().nullable().optional(),
           message: z.string().nullable().optional(),
+          modelSelection: z
+            .object({ instanceId: z.string(), model: z.string() })
+            .nullable()
+            .optional(),
           workspaceStrategy: z
             .object({ type: z.string() })
             .nullable()

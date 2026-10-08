@@ -86,6 +86,10 @@ test("a review opens 1 thread for each account and PR", async () => {
   const launch = lastCall("t3_thread_launch");
   assert.equal(launch.args.projectId, "proj-widgets");
   assert.deepEqual(launch.args.workspaceStrategy, { type: "root" });
+  assert.deepEqual(launch.args.modelSelection, {
+    instanceId: "claudeAgent",
+    model: "claude-opus-5-5",
+  });
   assert.match(String(launch.args.message), /as the GitHub account octocat/);
   assert.match(String(launch.args.message), /preview_open/);
 

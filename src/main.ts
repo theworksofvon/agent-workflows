@@ -260,6 +260,7 @@ async function startGuidedReview(
       settings: sqliteSettings(db),
       threads: sqliteT3Threads(db),
       defaultMcpUrl: config.t3McpUrl,
+      model: config.t3Model,
       appUrl: `http://127.0.0.1:${config.uiPublicPort}`,
       connect: connectT3,
     }),

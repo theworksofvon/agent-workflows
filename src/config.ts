@@ -24,6 +24,8 @@ export interface Config {
   uiPublicPort: number;
   /** T3 Code's MCP URL until the reviewer enters one in the app. */
   t3McpUrl: string | null;
+  /** The model of each review thread, as `<provider instance>/<model>`. */
+  t3Model: { instanceId: string; model: string };
 }
 
 function optional(name: string, fallback: string): string {
@@ -98,6 +100,15 @@ function agentName(name: string, fallback: string): string {
   return value;
 }
 
+function t3Model(value: string): Config["t3Model"] {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1)
+    throw new Error(
+      "T3_MODEL must be <provider instance>/<model>, such as claudeAgent/claude-opus-5-5.",
+    );
+  return { instanceId: value.slice(0, slash), model: value.slice(slash + 1) };
+}
+
 export function loadConfig(): Config {
   warnRetired();
   const agent = agentName("AGENT", "codex");
@@ -126,6 +137,7 @@ export function loadConfig(): Config {
       max: 65535,
     }),
     t3McpUrl: optional("T3_MCP_URL", "") || null,
+    t3Model: t3Model(optional("T3_MODEL", "claudeAgent/claude-opus-5-5")),
   };
 
   log.info("config loaded", {

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Review Threads Get a Model
+
+Date: 2026-10-08 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Fix "Open in T3" for a T3 project without a default model.
+Message: "Open in T3" failed with "Pass modelSelection: the project has no default model". The app now names the thread's model on each launch.
+Added/Changed: A new `T3_MODEL` setting (`<provider instance>/<model>`, default `claudeAgent/claude-opus-5-5`) goes to `t3_thread_launch` as `modelSelection`. The README registers the MCP server with `--scope user`, so the thread in the PR's repository has the tools.
+Fixed/Removed: Nothing removed.
+Handoff: Restart the app. Run `claude mcp add` again with `--scope user` if you registered the server without it.
+
 ### Review Threads in T3 Code
 
 Date: 2026-10-07 CDT; Status: Completed; PR: none yet on `guided-review`.

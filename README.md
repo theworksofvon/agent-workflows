@@ -262,7 +262,7 @@ The agent in the thread uses the app's MCP server and the `guided-review`
 skill. Register the server once for each agent CLI:
 
 ```bash
-claude mcp add --transport http guided-review http://127.0.0.1:4773/mcp
+claude mcp add --scope user --transport http guided-review http://127.0.0.1:4773/mcp
 codex mcp add guided-review --url http://127.0.0.1:4773/mcp
 ```
 
@@ -320,22 +320,23 @@ and managed worktrees.
 
 ## Configuration
 
-| Variable                   | Default         | Purpose                                                                        |
-| -------------------------- | --------------- | ------------------------------------------------------------------------------ |
-| `GITHUB_TOKEN`             | optional        | Token for `review` and for the app when `gh` has no account.                   |
-| `AGENT`                    | `codex`         | `codex` or `claude-code`.                                                      |
-| `REVIEW_ADVERSARIAL_MODE`  | `auto`          | `off`, `auto`, or `always`. A deep triage runs the pass even when it is `off`. |
-| `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT` | Adapter for the adversarial pass.                                              |
-| `UI_HOST`                  | `127.0.0.1`     | Address the app listens on.                                                    |
-| `UI_PORT`                  | `4773`          | Port the app listens on. T3 Code uses 3773.                                    |
-| `UI_PUBLIC_PORT`           | `UI_PORT`       | Port in the browser's address, when Docker publishes another port.             |
-| `MAX_CONCURRENT_RUNS`      | `3`             | Agent processes that run at the same time. A guided run counts as 2.           |
-| `STATE_DIR`                | `./state`       | Database, cached repositories, and worktrees.                                  |
-| `KEEP_WORKDIRS`            | `false`         | Keep worktrees and run directories for debugging.                              |
-| `CODEX_BIN`                | `codex`         | Codex executable.                                                              |
-| `CLAUDE_CODE_BIN`          | `claude`        | Claude Code executable.                                                        |
-| `LOG_LEVEL`                | `info`          | `debug`, `info`, `warn`, or `error`.                                           |
-| `T3_MCP_URL`               | unset           | T3 Code's MCP URL, until you enter another in the app.                         |
+| Variable                   | Default                       | Purpose                                                                        |
+| -------------------------- | ----------------------------- | ------------------------------------------------------------------------------ |
+| `GITHUB_TOKEN`             | optional                      | Token for `review` and for the app when `gh` has no account.                   |
+| `AGENT`                    | `codex`                       | `codex` or `claude-code`.                                                      |
+| `REVIEW_ADVERSARIAL_MODE`  | `auto`                        | `off`, `auto`, or `always`. A deep triage runs the pass even when it is `off`. |
+| `REVIEW_ADVERSARIAL_AGENT` | same as `AGENT`               | Adapter for the adversarial pass.                                              |
+| `UI_HOST`                  | `127.0.0.1`                   | Address the app listens on.                                                    |
+| `UI_PORT`                  | `4773`                        | Port the app listens on. T3 Code uses 3773.                                    |
+| `UI_PUBLIC_PORT`           | `UI_PORT`                     | Port in the browser's address, when Docker publishes another port.             |
+| `MAX_CONCURRENT_RUNS`      | `3`                           | Agent processes that run at the same time. A guided run counts as 2.           |
+| `STATE_DIR`                | `./state`                     | Database, cached repositories, and worktrees.                                  |
+| `KEEP_WORKDIRS`            | `false`                       | Keep worktrees and run directories for debugging.                              |
+| `CODEX_BIN`                | `codex`                       | Codex executable.                                                              |
+| `CLAUDE_CODE_BIN`          | `claude`                      | Claude Code executable.                                                        |
+| `LOG_LEVEL`                | `info`                        | `debug`, `info`, `warn`, or `error`.                                           |
+| `T3_MCP_URL`               | unset                         | T3 Code's MCP URL, until you enter another in the app.                         |
+| `T3_MODEL`                 | `claudeAgent/claude-opus-5-5` | The model of each review thread, as `<provider instance>/<model>`.             |
 
 The variables of the removed feedback bot (`REPOS`, `POLL_INTERVAL_SEC`,
 `HOST`, `PORT`, `WEBHOOK_SECRET`, `PUBLIC_URL`, `TAILSCALE_FUNNEL`,
