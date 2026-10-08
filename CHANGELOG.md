@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Review Threads Save Without T3's Link
+
+Date: 2026-10-08 CDT; Status: Completed; PR: none yet on `guided-review`.
+Task: Fix "Open in T3" failing with "Provided value cannot be bound to SQLite parameter 3."
+Message: T3 launched the thread, but its reply had no `link`, so the app could not save the thread and each click launched another one. The app now builds the link itself.
+Added/Changed: Before a launch, the app reads T3's environment id with `t3_environment_read` and builds `t3-thread://v1/<environment>/<thread>` the same way T3 does. A thread found again by its title uses the same link, because `t3_thread_list` gives no link either. The fake T3 in the tests replies without links, as the real one does.
+Fixed/Removed: A failed save no longer follows a successful launch, so a second click does not launch a duplicate thread.
+Handoff: Restart the app. Delete the duplicate "Review: …" threads that the failed clicks made in T3's "No project" list.
+
 ### Review Threads Get a Model
 
 Date: 2026-10-08 CDT; Status: Completed; PR: none yet on `guided-review`.

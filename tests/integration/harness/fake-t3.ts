@@ -52,6 +52,13 @@ export async function startFakeT3(): Promise<FakeT3> {
     const link = (id: string, title: string) =>
       `[${title}](t3-thread://v1/${FAKE_T3_ENVIRONMENT}/${id})`;
     server.registerTool(
+      "t3_environment_read",
+      { inputSchema: {} },
+      record("t3_environment_read", () => ({
+        environmentId: FAKE_T3_ENVIRONMENT,
+      })),
+    );
+    server.registerTool(
       "t3_project_list",
       { inputSchema: { limit: z.number().optional() } },
       record("t3_project_list", () => ({ projects, nextCursor: null })),
@@ -71,11 +78,7 @@ export async function startFakeT3(): Promise<FakeT3> {
               (args.projectId ?? null) === t.projectId &&
               t.title.includes(String(args.titleContains ?? "")),
           )
-          .map(([id, t]) => ({
-            threadId: id,
-            title: t.title,
-            link: link(id, t.title),
-          })),
+          .map(([id, t]) => ({ threadId: id, title: t.title })),
         nextCursor: null,
       })),
     );
@@ -120,7 +123,7 @@ export async function startFakeT3(): Promise<FakeT3> {
           title,
           projectId: (args.projectId as string | undefined) ?? null,
         });
-        return { threadId: id, link: link(id, title) };
+        return { threadId: id, projectId: args.projectId ?? null };
       }),
     );
     server.registerTool(

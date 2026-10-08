@@ -157,10 +157,18 @@ export function t3Link(ports: T3LinkPorts) {
         }
         return thread(row, title, false);
       }
+      // Read before the launch: a launched thread that is not saved is launched again.
+      const environmentId = await environmentOf(t3);
       const projectId = await projectFor(t3, session);
       const found = await findThread(t3, projectId, title);
       if (found) {
-        const saved = save(key, found, projectId, session);
+        const saved = save(
+          key,
+          threadLink(environmentId, found.threadId),
+          found.threadId,
+          projectId,
+          session,
+        );
         await t3.call("t3_thread_send", {
           threadId: found.threadId,
           message: newSessionMessage(session, ports.appUrl),
@@ -176,8 +184,15 @@ export function t3Link(ports: T3LinkPorts) {
         ...(projectId
           ? { projectId, workspaceStrategy: { type: "root" } }
           : { scratch: true }),
-      })) as { threadId: string; link: string };
-      return thread(save(key, launched, projectId, session), title, true);
+      })) as { threadId: string };
+      const saved = save(
+        key,
+        threadLink(environmentId, launched.threadId),
+        launched.threadId,
+        projectId,
+        session,
+      );
+      return thread(saved, title, true);
     })();
     opening.set(key, run);
     return run.finally(() => opening.delete(key));
@@ -185,14 +200,15 @@ export function t3Link(ports: T3LinkPorts) {
 
   const save = (
     key: string,
-    found: { threadId: string; link: string },
+    link: string,
+    threadId: string,
     projectId: string | null,
     session: ReviewSession,
   ): T3ThreadRow => {
     const row: T3ThreadRow = {
       key,
-      threadId: found.threadId,
-      link: found.link,
+      threadId,
+      link,
       projectId,
       sessionId: session.id,
       createdAt: new Date().toISOString(),
@@ -408,14 +424,32 @@ async function findThread(
   t3: T3Tools,
   projectId: string | null,
   title: string,
-): Promise<{ threadId: string; link: string } | null> {
+): Promise<{ threadId: string } | null> {
   if (projectId === null) return null;
   const list = (await t3.call("t3_thread_list", {
     projectId,
     titleContains: title,
     limit: 20,
-  })) as { threads: Array<{ threadId: string; title: string; link: string }> };
+  })) as { threads: Array<{ threadId: string; title: string }> };
   return list.threads.find((t) => t.title === title) ?? null;
+}
+
+/** The id of the T3 environment, which T3's thread links name. */
+async function environmentOf(t3: T3Tools): Promise<string> {
+  const env = (await t3.call("t3_environment_read", {})) as {
+    environmentId: string;
+  };
+  return env.environmentId;
+}
+
+/**
+ * The `t3-thread://` link to a thread. T3 lists threads without one, so the
+ * app builds it from the environment the same way T3 does.
+ */
+function threadLink(environmentId: string, threadId: string): string {
+  const segment = (id: string) =>
+    encodeURIComponent(id).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return `t3-thread://v1/${segment(environmentId)}/${segment(threadId)}`;
 }
 
 /**
