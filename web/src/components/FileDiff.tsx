@@ -199,6 +199,7 @@ export const FileDiff = memo(function FileDiff({
     <section
       className={`file card ${viewed ? "is-viewed" : ""}`}
       id={fileAnchor(file.path)}
+      data-path={file.path}
     >
       <header className="file-head">
         <button
@@ -334,6 +335,7 @@ const DiffLine = memo(function DiffLine({
   return (
     <tr
       className={`dl dl-${line.kind} ${active ? "is-active" : ""} ${marked ? "is-ref" : ""} ${marked === "end" ? "is-ref-end" : ""}`}
+      data-line={line.newLine ?? undefined}
     >
       <td className="gutter">{line.oldLine}</td>
       <td className="gutter">

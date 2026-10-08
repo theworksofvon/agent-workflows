@@ -301,3 +301,40 @@ export interface Inbox {
   /** The server could not refresh and sent its cached answer. */
   stale?: boolean;
 }
+
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
+/** What the reviewer has open, as the page reports it for get_focus. */
+export interface FocusInput {
+  tab: "overview" | "guide" | "diff";
+  chapter: string | null;
+  finding: string | null;
+  path: string | null;
+  lines: LineRange | null;
+}
+
+export interface T3Status {
+  connected: boolean;
+  /** The T3 MCP URL that the app uses, or null when none is set. */
+  mcpUrl: string | null;
+  expiresAt: string | null;
+}
+
+export interface T3Thread {
+  id: string;
+  title: string;
+  /** The thread in T3's web app, or null when the app cannot tell. */
+  url: string | null;
+  created: boolean;
+}
+
+export interface AskInput {
+  text: string;
+  path?: string;
+  lines?: LineRange;
+  finding?: string;
+  requestId: string;
+}

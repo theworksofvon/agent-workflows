@@ -4,6 +4,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startFakeGitHub, type FakeGitHub } from "./fake-github.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,7 +53,17 @@ export interface App {
   ): Promise<{ status: number; body: Json }>;
   /** Polls a session until it is ready or failed. */
   settle(id: string): Promise<Json>;
+  /** Calls a tool on the app's MCP endpoint, as an agent would. */
+  mcp(tool: string, args: object): Promise<{ isError: boolean; data: Json }>;
+  mcpTools(): Promise<string[]>;
+  /** Opens the session's event stream; `next` resolves with each event name. */
+  events(id: string): EventStream;
   stop(): Promise<number | null>;
+}
+
+export interface EventStream {
+  next(): Promise<string>;
+  close(): void;
 }
 
 export async function world(): Promise<World> {
@@ -147,6 +159,23 @@ function serving(child: ChildProcess, port: number): Promise<App> {
       }
       throw new Error(`session ${id} did not settle`);
     },
+    mcp: (tool, args) =>
+      withMcp(url, async (client) => {
+        const res = await client.callTool({
+          name: tool,
+          arguments: { ...args },
+        });
+        const text = (res.content as Array<{ text?: string }>)[0]?.text ?? "";
+        return {
+          isError: res.isError === true,
+          data: res.structuredContent ?? text,
+        };
+      }),
+    mcpTools: () =>
+      withMcp(url, async (client) =>
+        (await client.listTools()).tools.map((t) => t.name),
+      ),
+    events: (id) => eventStream(`${url}/api/sessions/${id}/events`),
     stop: async () => {
       if (child.exitCode === null) child.kill("SIGTERM");
       return exited;
@@ -164,6 +193,52 @@ function serving(child: ChildProcess, port: number): Promise<App> {
       fail(new Error(`app exited with ${code} before serving:\n${output}`)),
     );
   });
+}
+
+async function withMcp<T>(
+  url: string,
+  use: (client: Client) => Promise<T>,
+): Promise<T> {
+  const client = new Client({ name: "test", version: "1.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${url}/mcp`)),
+  );
+  try {
+    return await use(client);
+  } finally {
+    await client.close();
+  }
+}
+
+function eventStream(url: string): EventStream {
+  const abort = new AbortController();
+  const names: string[] = [];
+  const waiting: Array<(name: string) => void> = [];
+  void fetch(url, { signal: abort.signal })
+    .then(async (res) => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of res.body!) {
+        buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+        let end;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const name = /^event: (.+)$/m.exec(buffer.slice(0, end))?.[1];
+          buffer = buffer.slice(end + 2);
+          if (!name) continue;
+          const take = waiting.shift();
+          if (take) take(name);
+          else names.push(name);
+        }
+      }
+    })
+    .catch(() => {});
+  return {
+    next: () =>
+      names.length > 0
+        ? Promise.resolve(names.shift()!)
+        : new Promise((done) => waiting.push(done)),
+    close: () => abort.abort(),
+  };
 }
 
 function freePort(): Promise<number> {

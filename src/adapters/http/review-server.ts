@@ -16,6 +16,7 @@ import {
 } from "../../services/review-api.js";
 import { errorMessage } from "../../domain/util.js";
 import { listen, readBody, send, type ServerHandle } from "./http-util.js";
+import { handleMcp } from "./mcp-endpoint.js";
 
 /** web/dist at the repository root, from both src/ and the compiled dist/. */
 export const DEFAULT_STATIC_DIR = fileURLToPath(
@@ -44,6 +45,10 @@ const NOT_BUILT_PAGE = `<!doctype html>
 `;
 
 type Reply = { status: number; body: unknown };
+
+const EVENTS_PATH = /^\/api\/sessions\/([^/]+)\/events$/;
+/** A comment line this often keeps an idle event stream open through proxies. */
+const KEEPALIVE_MS = 25_000;
 type Handler = (
   params: string[],
   body: unknown,
@@ -82,6 +87,20 @@ export function startReviewServer(args: {
     }
     // Split rather than `new URL`: a target like `//[` throws there.
     const [path, search = ""] = String(req.url).split(/\?(.*)/s);
+    if (path === "/mcp") {
+      readBody(req, res, { error: "payload too large" }, (body) => {
+        void handleMcp(req, res, body, args.api).catch((err: unknown) => {
+          log.error("mcp request failed", { error: errorMessage(err) });
+          if (!res.headersSent) send(res, 500, { error: errorMessage(err) });
+        });
+      });
+      return;
+    }
+    const events = EVENTS_PATH.exec(path);
+    if (events && req.method === "GET") {
+      streamEvents(args.api, decodeURIComponent(events[1]), res);
+      return;
+    }
     if (path.startsWith("/api/")) {
       readBody(req, res, { error: "payload too large" }, (body) => {
         void handleApi(routes, req, path, search, body, res);
@@ -174,6 +193,8 @@ function routeTable(api: ReviewApi): Array<[string, RegExp, Handler]> {
       async ([id], b) => ok(await api.publish(id, b)),
     ],
     ["GET", /^sessions\/([^/]+)\/discuss$/, ([id]) => ok(api.discuss(id))],
+    ["GET", /^focus$/, () => ok(api.getFocus())],
+    ["PUT", /^focus$/, (_, b) => ok(api.setFocus(b))],
     [
       "GET",
       /^sessions\/([^/]+)\/checks$/,
@@ -251,6 +272,37 @@ async function handleApi(
       });
     send(res, status, { error: message });
   }
+}
+
+/**
+ * A server-sent events stream that says "changed" each time the session's
+ * human state changes. It opens with "ready", so a client knows it listens.
+ */
+function streamEvents(api: ReviewApi, id: string, res: ServerResponse): void {
+  let stop: () => void;
+  try {
+    stop = api.subscribe(id, () => res.write("event: changed\ndata: {}\n\n"));
+  } catch (err) {
+    send(res, err instanceof NotFoundError ? 404 : 500, {
+      error: errorMessage(err),
+    });
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  res.write("event: ready\ndata: {}\n\n");
+  const keepAlive = setInterval(
+    () => res.write(": keepalive\n\n"),
+    KEEPALIVE_MS,
+  );
+  keepAlive.unref();
+  res.on("close", () => {
+    clearInterval(keepAlive);
+    stop();
+  });
 }
 
 function decodeSegment(segment: string): string {

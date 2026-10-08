@@ -1,5 +1,9 @@
 import type {
   Accounts,
+  AskInput,
+  FocusInput,
+  T3Status,
+  T3Thread,
   Checks,
   ComposedReview,
   Health,
@@ -146,6 +150,31 @@ export const api = {
       "GET",
       `/api/repos/${enc(owner)}/${enc(repo)}/pulls/${number}/checks`,
     ),
+
+  setFocus: (focus: FocusInput & { review: string }) =>
+    request<unknown>("PUT", "/api/focus", focus),
+
+  t3Status: () => request<T3Status>("GET", "/api/t3"),
+
+  /** The T3 sign-in page to send the browser to. */
+  t3Connect: (mcpUrl: string) =>
+    request<{ authorizeUrl: string }>("POST", "/api/t3/connect", {
+      mcpUrl,
+    }).then((r) => r.authorizeUrl),
+
+  t3Disconnect: () => request<T3Status>("DELETE", "/api/t3"),
+
+  openInT3: (id: string) =>
+    request<{ thread: T3Thread }>("POST", `/api/sessions/${enc(id)}/t3`).then(
+      (r) => r.thread,
+    ),
+
+  ask: (id: string, input: AskInput) =>
+    request<{ thread: T3Thread }>(
+      "POST",
+      `/api/sessions/${enc(id)}/ask`,
+      input,
+    ).then((r) => r.thread),
 
   /** Choose the account of an old session that has none. */
   setSessionAccount: (id: string, login: string) =>

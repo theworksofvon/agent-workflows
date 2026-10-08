@@ -16,8 +16,10 @@
     "ui": "node --enable-source-maps dist/main.js ui"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "dotenv": "^16.4.5",
-    "octokit": "^4.0.3"
+    "octokit": "^4.0.3",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

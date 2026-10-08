@@ -23,6 +23,8 @@ import type {
   PullState,
 } from "../domain/inbox.js";
 import type { Checks, GitHubAccess } from "./github-access.js";
+import { focusStore, parseFocus, type Focus } from "./focus.js";
+import type { ReviewEvents } from "./review-events.js";
 
 export class NotFoundError extends DomainError {}
 export class BadRequestError extends DomainError {}
@@ -34,6 +36,7 @@ export interface ReviewApiPorts {
   /** Runs a guided review for the session; never awaited by a request. */
   startRun(sessionId: string): Promise<void>;
   agent: string;
+  events: ReviewEvents;
 }
 
 export interface SessionSummary {
@@ -74,8 +77,9 @@ const REPO_PULLS_PAGE = 50;
  * untrusted JSON, so every operation validates its own input.
  */
 export function reviewApi(ports: ReviewApiPorts) {
-  const { sessions, github } = ports;
+  const { sessions, github, events } = ports;
   const publishing = new Map<string, Promise<unknown>>();
+  const focus = focusStore();
 
   const session = (id: string): ReviewSession => {
     const found = sessions.get(id);
@@ -120,6 +124,12 @@ export function reviewApi(ports: ReviewApiPorts) {
   const human = (id: string): { human: HumanState } => ({
     human: sessions.human(id),
   });
+
+  /** The human state after a write, which every open page then reloads. */
+  const changed = (id: string): { human: HumanState } => {
+    events.changed(id);
+    return human(id);
+  };
 
   /** An unknown login is the caller's mistake, so it is a 400. */
   const account = async (login: string): Promise<string> => {
@@ -228,14 +238,14 @@ export function reviewApi(ports: ReviewApiPorts) {
     setChapter(id: string, chapterId: string, body: unknown) {
       session(id);
       sessions.setChapterReviewed(id, chapterId, flag(body, "reviewed"));
-      return human(id);
+      return changed(id);
     },
 
     setFile(id: string, body: unknown) {
       session(id);
       const path = text(body, "path");
       sessions.setFileViewed(id, path, flag(body, "viewed"));
-      return human(id);
+      return changed(id);
     },
 
     setVerdict(id: string, findingKey: string, body: unknown) {
@@ -251,7 +261,7 @@ export function reviewApi(ports: ReviewApiPorts) {
       if (typeof note !== "string")
         throw new BadRequestError("note must be a string");
       sessions.setVerdict(id, findingKey, verdict as Verdict | null, note);
-      return human(id);
+      return changed(id);
     },
 
     addComment(id: string, body: unknown) {
@@ -265,14 +275,14 @@ export function reviewApi(ports: ReviewApiPorts) {
         throw new BadRequestError("line must be a positive integer");
       if (comment === "") throw new BadRequestError("comment body is empty");
       sessions.addComment(id, { path, line: line as number, body: comment });
-      return human(id);
+      return changed(id);
     },
 
     deleteComment(id: string, commentId: string) {
       session(id);
       if (!sessions.deleteComment(id, commentId))
         throw new NotFoundError(`comment not found: ${commentId}`);
-      return human(id);
+      return changed(id);
     },
 
     previewPublish(
@@ -311,6 +321,7 @@ export function reviewApi(ports: ReviewApiPorts) {
         });
         const publishedAt = new Date().toISOString();
         sessions.update(id, { publishedAt });
+        events.changed(id);
         return { ok: true as const, publishedAt };
       })();
       publishing.set(id, run);
@@ -344,6 +355,23 @@ export function reviewApi(ports: ReviewApiPorts) {
         );
       sessions.update(id, { account: resolved });
       return { account: resolved };
+    },
+
+    /** Stops when the returned call runs. */
+    subscribe(id: string, listener: () => void): () => void {
+      session(id);
+      return events.subscribe(id, listener);
+    },
+
+    setFocus(body: unknown): { focus: Focus } {
+      const found = session(text(body, "review"));
+      const parsed = parseFocus(body as Record<string, unknown>);
+      if (typeof parsed === "string") throw new BadRequestError(parsed);
+      return { focus: focus.set(found, parsed) };
+    },
+
+    getFocus(): { focus: Focus | null } {
+      return { focus: focus.get() };
     },
 
     discuss(id: string): { prompt: string } {

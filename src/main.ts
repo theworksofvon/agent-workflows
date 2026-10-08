@@ -24,6 +24,7 @@ import {
   type GuidedReviewDeps,
 } from "./services/guided-review.js";
 import { reviewApi, type ReviewApi } from "./services/review-api.js";
+import { reviewEvents } from "./services/review-events.js";
 import { gitExec, scrubRepoCacheCredentials } from "./adapters/git/exec.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
@@ -250,6 +251,7 @@ async function startGuidedReview(
       );
     },
     agent: config.agent,
+    events: reviewEvents(),
   });
   const server = await dependencies.startReviewServer({
     host: config.uiHost,

@@ -36,6 +36,7 @@ import { useChecks } from "../lib/data";
 import { useShell } from "../lib/shell";
 import { repoName } from "../lib/sessions";
 import { useCurrentFile } from "../lib/use-current-file";
+import { useDiffSelection, useFocusReport, useLiveSession } from "../lib/live";
 import type {
   ApiFinding,
   HumanComment,
@@ -92,6 +93,7 @@ export function Session({
   useEffect(() => {
     void load();
   }, [load]);
+  useLiveSession(id, load);
 
   const status = detail?.session.status;
   const running =
@@ -265,6 +267,23 @@ export function Session({
   const currentFile = useCurrentFile(
     visiblePaths,
     READING_LINE + (showsBack ? BACK_ROW : 0),
+  );
+
+  const selection = useDiffSelection();
+  const lastFinding = useRef<string | null>(null);
+  if (focus && "findingId" in focus) lastFinding.current = focus.findingId;
+  const refLines = focus && "lines" in focus ? focus : null;
+  useFocusReport(
+    id,
+    session?.status === "ready"
+      ? {
+          tab,
+          chapter: tab === "guide" ? (currentChapter?.id ?? null) : null,
+          finding: lastFinding.current,
+          path: selection?.path ?? refLines?.path ?? currentFile,
+          lines: selection?.lines ?? refLines?.lines ?? null,
+        }
+      : null,
   );
 
   const reviewedCount = chapters.filter((c) => human?.chapters[c.id]).length;
