@@ -400,7 +400,7 @@ export function reviewApi(ports: ReviewApiPorts) {
       return t3(() => ports.t3.connect(object(body)));
     },
 
-    t3Callback(query: URLSearchParams): Promise<void> {
+    t3Callback(query: URLSearchParams): Promise<string> {
       return t3(() => ports.t3.callback(query));
     },
 

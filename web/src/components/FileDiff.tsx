@@ -85,6 +85,18 @@ export const FileDiff = memo(function FileDiff({
     ? 0
     : comments.filter((c) => collapsed.has(c.line)).length;
 
+  const askFinding = (f: ApiFinding) => {
+    const ask = review.askAbout;
+    return ask
+      ? () =>
+          ask({
+            path: f.path,
+            lines: { start: f.line, end: f.line },
+            finding: f.id,
+          })
+      : undefined;
+  };
+
   function toggleViewed() {
     review.setViewed(file.path, !viewed);
     setOpen(viewed);
@@ -105,6 +117,7 @@ export const FileDiff = memo(function FileDiff({
                 finding={f}
                 verdict={review.verdictFor(f.id)}
                 onChange={(v, note) => review.setVerdict(f.id, v, note)}
+                onAsk={askFinding(f)}
               />
             ))}
             {lineComments.map((c) => (
@@ -257,6 +270,7 @@ export const FileDiff = memo(function FileDiff({
                   showLocation
                   verdict={review.verdictFor(f.id)}
                   onChange={(v, note) => review.setVerdict(f.id, v, note)}
+                  onAsk={askFinding(f)}
                 />
               ))}
               {outsideComments.map((c) => (

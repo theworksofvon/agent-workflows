@@ -303,9 +303,9 @@ async function finishSignIn(
   search: string,
   res: ServerResponse,
 ): Promise<void> {
-  let location = "/?t3=connected#/";
+  let location: string;
   try {
-    await api.t3Callback(new URLSearchParams(search));
+    location = `/?t3=connected${await api.t3Callback(new URLSearchParams(search))}`;
   } catch (err) {
     log.warn("T3 sign-in failed", { error: errorMessage(err) });
     location = `/?t3=failed&reason=${encodeURIComponent(errorMessage(err))}#/`;

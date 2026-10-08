@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar, type RevealRequest } from "./components/Sidebar";
+import { T3SignInNotice } from "./components/T3Dialog";
 import { ToastProvider } from "./components/Toast";
 import { DataContext, useAppData } from "./lib/data";
 import { parseRoute } from "./lib/route";
@@ -73,6 +74,7 @@ export function App() {
     <ShellContext.Provider value={shell}>
       <DataContext.Provider value={data}>
       <ToastProvider>
+        <T3SignInNotice />
         <div
           className={`shell ${sidebarOpen ? "has-sidebar" : ""} ${sidebar.narrow ? "is-narrow" : ""}`}
         >

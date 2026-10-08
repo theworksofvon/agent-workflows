@@ -3756,3 +3756,40 @@ html.dark {
 .dl-ref-close:hover {
   background: color-mix(in srgb, var(--ref-line) 30%, transparent);
 }
+
+/* Ask in T3: a button beside a diff selection, and the box that sends. */
+.ask-float {
+  position: fixed;
+  z-index: 60;
+  transform: translateX(-100%);
+  box-shadow: var(--shadow-lg);
+  background: var(--popover);
+}
+
+.ask-box {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 65;
+  width: min(420px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.modal-narrow {
+  width: min(520px, 100%);
+}

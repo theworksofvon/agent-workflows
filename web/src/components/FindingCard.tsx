@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { MessagesSquare, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { findingAnchor } from "../lib/format";
 import { Markdown } from "../lib/markdown";
@@ -17,11 +17,14 @@ export function FindingCard({
   finding,
   verdict,
   onChange,
+  onAsk,
   showLocation = false,
 }: {
   finding: ApiFinding;
   verdict: FindingVerdict | undefined;
   onChange: (verdict: Verdict | null, note: string) => void;
+  /** Asks the T3 thread about this finding; absent without T3. */
+  onAsk?: () => void;
   showLocation?: boolean;
 }) {
   const [note, setNote] = useState(verdict?.note ?? "");
@@ -47,6 +50,17 @@ export function FindingCard({
           </span>
         )}
         <span className="spacer" />
+        {onAsk && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onAsk}
+            title="Ask the review's T3 thread about this finding"
+          >
+            <MessagesSquare size={12} />
+            Ask
+          </button>
+        )}
         <div className="verdicts" role="group" aria-label="Your verdict">
           {VERDICTS.map((v) => (
             <button

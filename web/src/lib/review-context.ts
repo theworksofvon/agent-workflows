@@ -37,6 +37,15 @@ export interface ReviewActions {
   setVerdict(findingId: string, verdict: Verdict | null, note: string): void;
   addComment(path: string, line: number, body: string): Promise<boolean>;
   deleteComment(commentId: string): void;
+  /** Opens the Ask box; null when T3 is not connected. */
+  askAbout: ((target: AskTarget) => void) | null;
+}
+
+/** What a question to the T3 thread is about. */
+export interface AskTarget {
+  path?: string;
+  lines?: { start: number; end: number };
+  finding?: string;
 }
 
 export const ReviewContext = createContext<ReviewActions | null>(null);

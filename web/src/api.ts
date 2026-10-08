@@ -157,9 +157,11 @@ export const api = {
   t3Status: () => request<T3Status>("GET", "/api/t3"),
 
   /** The T3 sign-in page to send the browser to. */
-  t3Connect: (mcpUrl: string) =>
+  /** `returnTo` is the `#/` route that the browser comes back to. */
+  t3Connect: (mcpUrl: string, returnTo: string) =>
     request<{ authorizeUrl: string }>("POST", "/api/t3/connect", {
       mcpUrl,
+      returnTo,
     }).then((r) => r.authorizeUrl),
 
   t3Disconnect: () => request<T3Status>("DELETE", "/api/t3"),

@@ -58,6 +58,8 @@ test("before a sign-in, T3 calls ask the reviewer to connect", async () => {
 
 test("connect signs in with OAuth, and disconnect forgets the token", async () => {
   assert.equal(await connect(), "/?t3=connected#/");
+  assert.equal(await connect(app, "#/s/abc"), "/?t3=connected#/s/abc");
+  assert.equal(await connect(app, "javascript:x"), "/?t3=connected#/");
   const status = (await app.api("GET", "t3")).body;
   assert.equal(status.connected, true);
   assert.equal(JSON.stringify(status).includes("t3tok"), false);
@@ -200,8 +202,8 @@ test("a T3 that does not answer is a 502 with its URL", async () => {
 });
 
 /** Runs the sign-in as the browser would; returns where the app sends it. */
-async function connect(target: App = app): Promise<string> {
-  const { body } = await target.api("POST", "t3/connect", {});
+async function connect(target: App = app, returnTo?: string): Promise<string> {
+  const { body } = await target.api("POST", "t3/connect", { returnTo });
   const approved = await fetch(body.authorizeUrl, { redirect: "manual" });
   const back = await fetch(approved.headers.get("location")!, {
     redirect: "manual",

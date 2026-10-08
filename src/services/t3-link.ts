@@ -57,6 +57,8 @@ interface PendingSignIn {
   redirectUri: string;
   verifier: string;
   expires: number;
+  /** The app page to go back to, as a `#/` route. */
+  returnTo: string;
 }
 
 const MCP_URL = "t3.mcpUrl";
@@ -225,7 +227,9 @@ export function t3Link(ports: T3LinkPorts) {
       const state = randomBytes(16).toString("base64url");
       const now = Date.now();
       for (const [key, p] of pending) if (p.expires <= now) pending.delete(key);
+      const back = typeof body.returnTo === "string" ? body.returnTo : "";
       pending.set(state, {
+        returnTo: /^#\/[\w/%.-]*$/.test(back) ? back : "#/",
         mcpUrl: url,
         clientId: id,
         redirectUri,
@@ -242,8 +246,8 @@ export function t3Link(ports: T3LinkPorts) {
       };
     },
 
-    /** Finishes a sign-in from T3's redirect. */
-    async callback(query: URLSearchParams): Promise<void> {
+    /** Finishes a sign-in from T3's redirect; returns the page to go back to. */
+    async callback(query: URLSearchParams): Promise<string> {
       const state = query.get("state") ?? "";
       const sign = pending.get(state);
       pending.delete(state);
@@ -261,6 +265,7 @@ export function t3Link(ports: T3LinkPorts) {
         verifier: sign.verifier,
       });
       settings.set(TOKEN, JSON.stringify({ ...issued, mcpUrl: sign.mcpUrl }));
+      return sign.returnTo;
     },
 
     disconnect(): T3Status {

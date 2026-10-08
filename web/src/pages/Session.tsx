@@ -1,6 +1,8 @@
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeft, MessagesSquare, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, needsAccountChoice } from "../api";
+import { api, ApiError, needsAccountChoice, optional } from "../api";
+import { AskBox } from "../components/AskBox";
+import { T3Dialog } from "../components/T3Dialog";
 import { SessionAccountPicker } from "../components/AccountSwitcher";
 import { isPopoverOpen } from "../components/Popover";
 import { DiffTab } from "../components/DiffTab";
@@ -21,6 +23,7 @@ import { isTextEntry, type KeyTarget } from "../lib/keys";
 import { buildCrumbs, chapterIndexOf, type Crumb } from "../lib/orientation";
 import {
   ReviewContext,
+  type AskTarget,
   type FocusTarget,
   type Jump,
   type ReviewActions,
@@ -42,6 +45,8 @@ import type {
   HumanComment,
   HumanState,
   SessionDetail,
+  T3Status,
+  T3Thread,
 } from "../types";
 
 const POLL_MS = 2000;
@@ -73,6 +78,10 @@ export function Session({
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [focus, setFocus] = useState<FocusTarget | null>(null);
   const [accountPrompt, setAccountPrompt] = useState<string | null>(null);
+  const [t3, setT3] = useState<T3Status | null>(null);
+  const [t3Dialog, setT3Dialog] = useState(false);
+  const [thread, setThread] = useState<T3Thread | null>(null);
+  const [askTarget, setAskTarget] = useState<AskTarget | null>(null);
   const restoreScroll = useRef<number | null>(null);
   const toast = useToast();
   const shell = useShell();
@@ -95,6 +104,10 @@ export function Session({
   }, [load]);
   useLiveSession(id, load);
 
+  useEffect(() => {
+    void optional(api.t3Status()).then(setT3, () => {});
+  }, []);
+  const t3Connected = t3?.connected === true;
   const status = detail?.session.status;
   const running =
     status !== undefined && status !== "ready" && status !== "failed";
@@ -175,6 +188,7 @@ export function Session({
         ),
       addComment: (path, line, body) =>
         mutate(null, () => api.addComment(id, path, line, body)),
+      askAbout: t3Connected ? setAskTarget : null,
       deleteComment: (commentId) =>
         void mutate(
           (h) => ({
@@ -184,7 +198,7 @@ export function Session({
           () => api.deleteComment(id, commentId),
         ),
     };
-  }, [human, findings, id, mutate, focus]);
+  }, [human, findings, id, mutate, focus, t3Connected]);
 
   const goChapter = useCallback(
     (index: number) => {
@@ -343,7 +357,44 @@ export function Session({
     setChapterReviewed,
   ]);
 
-  async function discuss() {
+  /** Opens the review's T3 thread, or offers to connect T3 first. */
+  async function openInT3() {
+    if (!t3Connected) {
+      setT3Dialog(true);
+      return;
+    }
+    try {
+      const opened = await api.openInT3(id);
+      setThread(opened);
+      toast(
+        opened.created
+          ? `Opened a new T3 thread: ${opened.title}`
+          : `Back in T3: ${opened.title}`,
+      );
+    } catch (err) {
+      toast((err as Error).message, "error");
+      if (err instanceof ApiError && err.status === 409)
+        void optional(api.t3Status()).then(setT3, () => {});
+    }
+  }
+
+  async function sendAsk(target: AskTarget, text: string): Promise<boolean> {
+    try {
+      const sent = await api.ask(id, {
+        ...target,
+        text,
+        requestId: crypto.randomUUID(),
+      });
+      setThread(sent);
+      toast(`Sent to T3: ${sent.title}`);
+      return true;
+    } catch (err) {
+      toast((err as Error).message, "error");
+      return false;
+    }
+  }
+
+  async function copyPrompt() {
     try {
       const prompt = await api.discussPrompt(id);
       await copyText(withSkillHeader(window.location.origin, id, prompt));
@@ -440,7 +491,8 @@ export function Session({
         tab={tab}
         chapterId={currentChapter?.id ?? null}
         progress={progress}
-        onDiscuss={() => void discuss()}
+        onDiscuss={() => void openInT3()}
+        threadUrl={thread?.url ?? null}
         onPublish={() => setPublishing(true)}
         onRerun={() => void rerun()}
         below={
@@ -530,6 +582,38 @@ export function Session({
               ))}
             {tab === "diff" && <DiffTab files={files} />}
           </>
+        )}
+        {selection && t3Connected && !askTarget && (
+          <button
+            type="button"
+            className="btn btn-sm ask-float"
+            style={{ top: selection.rect.top + 6, left: selection.rect.left }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() =>
+              setAskTarget({ path: selection.path, lines: selection.lines })
+            }
+          >
+            <MessagesSquare size={12} />
+            Ask in T3
+          </button>
+        )}
+        {askTarget && (
+          <AskBox
+            target={askTarget}
+            onSend={(text) => sendAsk(askTarget, text)}
+            onClose={() => setAskTarget(null)}
+          />
+        )}
+        {t3Dialog && t3 && (
+          <T3Dialog
+            status={t3}
+            onChanged={setT3}
+            onCopyPrompt={() => {
+              setT3Dialog(false);
+              void copyPrompt();
+            }}
+            onClose={() => setT3Dialog(false)}
+          />
         )}
         {publishing && (
           <PublishDialog

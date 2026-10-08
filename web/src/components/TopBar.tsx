@@ -1,4 +1,10 @@
-import { MessagesSquare, PanelLeft, RotateCw, Send } from "lucide-react";
+import {
+  ExternalLink,
+  MessagesSquare,
+  PanelLeft,
+  RotateCw,
+  Send,
+} from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { runFinished } from "../lib/format";
 import { TAB_LABELS, type Crumb } from "../lib/orientation";
@@ -54,6 +60,7 @@ export function SessionTopBar({
   chapterId,
   progress,
   onDiscuss,
+  threadUrl,
   onPublish,
   onRerun,
   below,
@@ -65,6 +72,8 @@ export function SessionTopBar({
   chapterId: string | null;
   progress: Progress;
   onDiscuss: () => void;
+  /** The review's thread in T3's web app, once the thread is open. */
+  threadUrl: string | null;
   onPublish: () => void;
   onRerun: () => void;
   below?: ReactNode;
@@ -114,11 +123,23 @@ export function SessionTopBar({
             className="btn btn-ghost btn-t3"
             onClick={onDiscuss}
             disabled={!ready}
-            title="Copy a prompt that opens this review in a T3 thread"
+            title="Open this review in its T3 thread"
           >
             <MessagesSquare size={14} />
             <span className="btn-label">Open in T3</span>
           </button>
+          {threadUrl && (
+            <a
+              className="btn btn-ghost"
+              href={threadUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Show the thread in T3's web app"
+              aria-label="Show the thread in T3's web app"
+            >
+              <ExternalLink size={14} />
+            </a>
+          )}
           <button
             className="btn btn-ghost"
             onClick={onRerun}
