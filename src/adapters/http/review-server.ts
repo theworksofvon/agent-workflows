@@ -9,6 +9,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "../../log.js";
 import {
+  BadGatewayError,
   BadRequestError,
   ConflictError,
   NotFoundError,
@@ -94,6 +95,10 @@ export function startReviewServer(args: {
           if (!res.headersSent) send(res, 500, { error: errorMessage(err) });
         });
       });
+      return;
+    }
+    if (path === "/api/t3/callback" && req.method === "GET") {
+      void finishSignIn(args.api, search, res);
       return;
     }
     const events = EVENTS_PATH.exec(path);
@@ -194,6 +199,19 @@ function routeTable(api: ReviewApi): Array<[string, RegExp, Handler]> {
     ],
     ["GET", /^sessions\/([^/]+)\/discuss$/, ([id]) => ok(api.discuss(id))],
     ["GET", /^focus$/, () => ok(api.getFocus())],
+    ["GET", /^t3$/, () => ok(api.t3Status())],
+    ["POST", /^t3\/connect$/, async (_, b) => ok(await api.t3Connect(b))],
+    ["DELETE", /^t3$/, () => ok(api.t3Disconnect())],
+    [
+      "POST",
+      /^sessions\/([^/]+)\/t3$/,
+      async ([id]) => ok(await api.openInT3(id)),
+    ],
+    [
+      "POST",
+      /^sessions\/([^/]+)\/ask$/,
+      async ([id], b) => ok(await api.ask(id, b)),
+    ],
     ["PUT", /^focus$/, (_, b) => ok(api.setFocus(b))],
     [
       "GET",
@@ -262,7 +280,9 @@ async function handleApi(
           ? 400
           : err instanceof ConflictError
             ? 409
-            : 500;
+            : err instanceof BadGatewayError
+              ? 502
+              : 500;
     const message = errorMessage(err);
     if (status === 500)
       log.error("review api request failed", {
@@ -272,6 +292,26 @@ async function handleApi(
       });
     send(res, status, { error: message });
   }
+}
+
+/**
+ * T3 sends the browser here after the reviewer approves the sign-in. The
+ * browser then goes back to the app, with the result in the query.
+ */
+async function finishSignIn(
+  api: ReviewApi,
+  search: string,
+  res: ServerResponse,
+): Promise<void> {
+  let location = "/?t3=connected#/";
+  try {
+    await api.t3Callback(new URLSearchParams(search));
+  } catch (err) {
+    log.warn("T3 sign-in failed", { error: errorMessage(err) });
+    location = `/?t3=failed&reason=${encodeURIComponent(errorMessage(err))}#/`;
+  }
+  res.writeHead(302, { location, "cache-control": "no-store" });
+  res.end();
 }
 
 /**

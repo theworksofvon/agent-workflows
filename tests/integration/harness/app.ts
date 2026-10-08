@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startFakeGitHub, type FakeGitHub } from "./fake-github.js";
+import { startFakeT3, type FakeT3 } from "./fake-t3.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
@@ -24,6 +25,7 @@ const BIN = join(HERE, "bin");
 export interface World {
   root: string;
   github: FakeGitHub;
+  t3: FakeT3;
   env: Record<string, string>;
   /** Runs `main.ts` with `args` to completion. */
   cli(
@@ -45,6 +47,7 @@ type Json = any;
 export interface App {
   url: string;
   host: string;
+  port: number;
   /** Sends a request as the app's own page would. */
   api(
     method: string,
@@ -73,6 +76,7 @@ export async function world(): Promise<World> {
   mkdirSync(home);
   mkdirSync(cwd);
   const github = await startFakeGitHub(root);
+  const t3 = await startFakeT3();
   writeFileSync(
     join(home, ".gitconfig"),
     `[url "file://${github.remotes}/"]\n\tinsteadOf = https://github.com/\n`,
@@ -87,6 +91,7 @@ export async function world(): Promise<World> {
     CLAUDE_CODE_BIN: join(BIN, "agent"),
     FAKE_GH_ACCOUNTS: "octocat,octo-work",
     LOG_LEVEL: "error",
+    T3_MCP_URL: t3.mcpUrl,
   };
   // Child processes write their coverage here for the test runner.
   if (process.env.NODE_V8_COVERAGE)
@@ -98,6 +103,7 @@ export async function world(): Promise<World> {
   return {
     root,
     github,
+    t3,
     env,
     // Async: the fake GitHub in this process must keep answering.
     cli: (args, extra = {}) =>
@@ -126,6 +132,7 @@ export async function world(): Promise<World> {
     close: async () => {
       await Promise.all(apps.map((app) => app.stop()));
       await github.close();
+      await t3.close();
       rmSync(root, { recursive: true, force: true });
     },
   };
@@ -140,6 +147,7 @@ function serving(child: ChildProcess, port: number): Promise<App> {
   const app: App = {
     url,
     host,
+    port,
     api: async (method, path, body) => {
       const res = await fetch(`${url}/api/${path}`, {
         method,

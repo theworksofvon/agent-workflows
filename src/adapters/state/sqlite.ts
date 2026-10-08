@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS t3_threads (
+  thread_key TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  link TEXT NOT NULL,
+  project_id TEXT,
+  session_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS review_comments (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,

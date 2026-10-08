@@ -25,10 +25,19 @@ import type {
 import type { Checks, GitHubAccess } from "./github-access.js";
 import { focusStore, parseFocus, type Focus } from "./focus.js";
 import type { ReviewEvents } from "./review-events.js";
+import {
+  T3InputError,
+  T3NotConnectedError,
+  type T3Link,
+  type T3Status,
+  type T3Thread,
+} from "./t3-link.js";
 
 export class NotFoundError extends DomainError {}
 export class BadRequestError extends DomainError {}
 export class ConflictError extends DomainError {}
+/** T3 failed or could not be reached. */
+export class BadGatewayError extends DomainError {}
 
 export interface ReviewApiPorts {
   sessions: ReviewSessionStore;
@@ -37,6 +46,7 @@ export interface ReviewApiPorts {
   startRun(sessionId: string): Promise<void>;
   agent: string;
   events: ReviewEvents;
+  t3: T3Link;
 }
 
 export interface SessionSummary {
@@ -152,6 +162,14 @@ export function reviewApi(ports: ReviewApiPorts) {
         "choose the account for this review: it was stored without one",
       );
     return account(found.account);
+  };
+
+  /** A session whose PR and account a T3 thread can name. */
+  const t3Ready = async (id: string): Promise<ReviewSession> => {
+    const found = session(id);
+    requireReady(found);
+    await sessionAccount(found);
+    return found;
   };
 
   const withSession = <T extends PullCard>(
@@ -374,6 +392,33 @@ export function reviewApi(ports: ReviewApiPorts) {
       return { focus: focus.get() };
     },
 
+    t3Status(): T3Status {
+      return ports.t3.status();
+    },
+
+    t3Connect(body: unknown): Promise<{ authorizeUrl: string }> {
+      return t3(() => ports.t3.connect(object(body)));
+    },
+
+    t3Callback(query: URLSearchParams): Promise<void> {
+      return t3(() => ports.t3.callback(query));
+    },
+
+    t3Disconnect(): T3Status {
+      return ports.t3.disconnect();
+    },
+
+    /** Opens the T3 thread of this account's review of the PR. */
+    async openInT3(id: string): Promise<{ thread: T3Thread }> {
+      const found = await t3Ready(id);
+      return { thread: await t3(() => ports.t3.openThread(found)) };
+    },
+
+    async ask(id: string, body: unknown): Promise<{ thread: T3Thread }> {
+      const found = await t3Ready(id);
+      return { thread: await t3(() => ports.t3.ask(found, object(body))) };
+    },
+
     discuss(id: string): { prompt: string } {
       const found = session(id);
       if (!found.pr)
@@ -446,6 +491,25 @@ export function reviewApi(ports: ReviewApiPorts) {
       return github.checks(await github.current(), ref, prNumber(number));
     },
   };
+}
+
+/** Maps a T3 failure to the HTTP status the reviewer's request deserves. */
+async function t3<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof T3NotConnectedError)
+      throw new ConflictError(err.message);
+    if (err instanceof T3InputError) throw new BadRequestError(err.message);
+    if (err instanceof DomainError) throw new BadGatewayError(err.message);
+    throw err;
+  }
+}
+
+function object(body: unknown): Record<string, unknown> {
+  return typeof body === "object" && body !== null
+    ? (body as Record<string, unknown>)
+    : {};
 }
 
 function repoRef(owner: string, repo: string): RepoRef {

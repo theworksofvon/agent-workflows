@@ -22,6 +22,8 @@ export interface Config {
   uiPort: number;
   /** The port in the browser's address; UI_PORT unless Docker maps another. */
   uiPublicPort: number;
+  /** T3 Code's MCP URL until the reviewer enters one in the app. */
+  t3McpUrl: string | null;
 }
 
 function optional(name: string, fallback: string): string {
@@ -123,6 +125,7 @@ export function loadConfig(): Config {
       min: 1,
       max: 65535,
     }),
+    t3McpUrl: optional("T3_MCP_URL", "") || null,
   };
 
   log.info("config loaded", {

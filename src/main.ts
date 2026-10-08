@@ -25,6 +25,9 @@ import {
 } from "./services/guided-review.js";
 import { reviewApi, type ReviewApi } from "./services/review-api.js";
 import { reviewEvents } from "./services/review-events.js";
+import { t3Link } from "./services/t3-link.js";
+import { sqliteT3Threads } from "./adapters/state/t3-threads.js";
+import { connectT3 } from "./adapters/t3/t3-client.js";
 import { gitExec, scrubRepoCacheCredentials } from "./adapters/git/exec.js";
 import { getAgent } from "./adapters/agent/registry.js";
 import type { AgentAdapter } from "./adapters/agent/agent.interface.js";
@@ -252,6 +255,13 @@ async function startGuidedReview(
     },
     agent: config.agent,
     events: reviewEvents(),
+    t3: t3Link({
+      settings: sqliteSettings(db),
+      threads: sqliteT3Threads(db),
+      defaultMcpUrl: config.t3McpUrl,
+      appUrl: `http://127.0.0.1:${config.uiPublicPort}`,
+      connect: connectT3,
+    }),
   });
   const server = await dependencies.startReviewServer({
     host: config.uiHost,

@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 export interface SettingsStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
+  delete(key: string): void;
 }
 
 export function sqliteSettings(db: DatabaseSync): SettingsStore {
@@ -19,6 +20,9 @@ export function sqliteSettings(db: DatabaseSync): SettingsStore {
         `INSERT INTO settings (key, value) VALUES (?, ?)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
       ).run(key, value);
+    },
+    delete(key) {
+      db.prepare("DELETE FROM settings WHERE key = ?").run(key);
     },
   };
 }
