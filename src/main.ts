@@ -118,6 +118,7 @@ export async function runCli(
     await runReviewCommand(rest, dependencies);
     return;
   }
+  if (command === "open") return runOpenCommand(rest, dependencies);
   if (command === undefined) return runStartCommand([], dependencies);
   // `ui` is the name earlier versions used for `start`.
   if (command === "start" || command === "ui")
@@ -362,12 +363,70 @@ export function printHelp(
 Usage:
   pnpm start
   pnpm review owner/repo#123 [--post|--dry-run] [--adversarial|--no-adversarial]
+  pnpm agent-workflows open owner/repo#123
 
 Commands:
   start    Serve the guided review app and API on UI_HOST:UI_PORT (default 127.0.0.1:4773).
            This is the default command; ui is an alias.
+  open     Start a guided review of a PR in the running app and open it in its T3 thread
   review   Run a read-only pull-request review; add --post to publish findings
   help     Show this message`);
+}
+
+/** How long `open` waits for the agents to finish a guided review. */
+const OPEN_WAIT_MS = 15 * 60 * 1000;
+const OPEN_POLL_MS = 1000;
+
+/**
+ * Asks the running app to review a PR, waits for the run, and opens the
+ * review in its T3 thread. It starts no server: `start` must be running.
+ */
+export async function runOpenCommand(
+  args: string[],
+  dependencies: CliDependencies = defaultCliDependencies,
+): Promise<void> {
+  const [target, ...extra] = args;
+  if (!target || extra.length > 0 || target.startsWith("-"))
+    throw new Error("Usage: pnpm agent-workflows open owner/repo#123");
+  const config = dependencies.loadConfig();
+  const base = `http://127.0.0.1:${config.uiPublicPort}/api`;
+  const call = async (method: string, path: string, body?: unknown) => {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/${path}`, {
+        method,
+        headers:
+          body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      throw new Error(
+        `The review app is not running at ${base}. Start it with mise run start.`,
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) throw new Error(String(data.error ?? res.status));
+    return data;
+  };
+  const { id } = (await call("POST", "sessions", { target })) as { id: string };
+  dependencies.writeLine(`Review started: ${id}`);
+  const deadline = Date.now() + OPEN_WAIT_MS;
+  for (;;) {
+    const { session } = (await call("GET", `sessions/${id}`)) as {
+      session: { status: string; error: string | null };
+    };
+    if (session.status === "failed")
+      throw new Error(`The review failed: ${session.error}`);
+    if (session.status === "ready") break;
+    if (Date.now() > deadline)
+      throw new Error(`The review is still running: ${id}`);
+    await new Promise((done) => setTimeout(done, OPEN_POLL_MS));
+  }
+  const { thread } = (await call("POST", `sessions/${id}/t3`)) as {
+    thread: { title: string; url: string | null };
+  };
+  dependencies.writeLine(`Opened in T3: ${thread.title}`);
+  if (thread.url) dependencies.writeLine(thread.url);
 }
 
 export async function runReviewCommand(

@@ -161,6 +161,22 @@ test("Ask sends 1 message with the lines, the account, and the request id", asyn
   );
 });
 
+test("open starts a review and prints its thread", async () => {
+  await connect();
+  const env = { UI_PORT: String(app.port) };
+  const r = await w.cli(["open", "acme/widgets#1"], env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Opened in T3: Review: acme\/widgets#1 as octocat/);
+
+  const usage = await w.cli(["open"], env);
+  assert.equal(usage.status, 1);
+  assert.match(usage.stdout + usage.stderr, /Usage: pnpm agent-workflows open/);
+  const down = await w.cli(["open", "acme/widgets#1"], { UI_PORT: "1" });
+  assert.match(down.stdout + down.stderr, /not running/);
+  const silent = await w.cli(["open", "acme/widgets#2"], env);
+  assert.match(silent.stdout + silent.stderr, /not found|failed/i);
+});
+
 test("a token that T3 refuses disconnects the app", async () => {
   const id = await reviewOf("acme/widgets#1");
   w.t3.revokeTokens();
